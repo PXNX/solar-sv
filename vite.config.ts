@@ -47,9 +47,7 @@ export default defineConfig({
 			// other pwa options 
 		} */
 	],
-	optimizeDeps: {
-		include: ['leaflet', 'leaflet-draw']
-	},
+
 	server: {
 		allowedHosts: true,
 		port: 3021

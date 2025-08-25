@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Map, TileLayer, Polygon, Marker } from 'svelte-leafletjs';
+
 	import type { Roof, SolarAnalysis, SearchResult } from '$lib/types';
 
 	interface Props {

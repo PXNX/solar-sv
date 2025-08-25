@@ -2,10 +2,10 @@
 	import type { Roof, PanelConfig, SearchResult, SolarAnalysis } from '$lib/types';
 
 	import AddressSearch from './AddressSearch.svelte';
-	import RoofSection from './RoofSection.svelte';
 	import PanelSettings from './PanelSettings.svelte';
 	import SolarResults from './SolarResults.svelte';
 	import Instructions from './Instructions.svelte';
+	import RoofSection from './RoofSection.svelte';
 
 	interface Props {
 		searchQuery: string;
