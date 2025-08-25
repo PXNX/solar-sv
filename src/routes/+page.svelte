@@ -1,195 +1,501 @@
-<script lang="ts">
-	import type { Roof } from '$lib/types/Roof';
-	import type { PanelConfig } from '$lib/types/PanelConfig';
-	import type { SearchResult } from '$lib/types/SearchResult';
+<!-- SolarPanelPlanner.svelte -->
+<script>
+	import { onMount } from 'svelte';
 
-	// Components
-	import Sidebar from '$lib/components/Sidebar.svelte';
-	import MapContainer from '$lib/components/MapContainer.svelte';
-	import DrawingModeOverlay from '$lib/components/DrawingModeOverlay.svelte';
-
-	// Utilities
-	import { createPersistentState } from '$lib/utils/storeutils';
-	import { calculatePolygonArea, calculateSolarPotential } from '$lib/utils/calculations';
-
-	// --- Initial State Definitions ---
-	const [initialPanelConfig, savePanelConfig] = createPersistentState<PanelConfig>('panelConfig', {
-		width: 2.0,
-		height: 1.0,
-		spacing: 0.1,
-		roofCoverage: 0.8
-	});
-
-	const [initialCurrentRoof, saveCurrentRoof] = createPersistentState<Roof | null>(
-		'currentRoof',
-		null
-	);
-
-	// --- Reactive State ($state, $derived) ---
-	let panelConfig = $state<PanelConfig>(initialPanelConfig);
-	let currentRoof = $state<Roof | null>(initialCurrentRoof);
-	let searchQuery = $state('');
-	let searchResults = $state<SearchResult[]>([]);
+	// Svelte 5 runes
+	let map = $state(null);
+	let leaflet = $state(null);
+	let searchAddress = $state('');
+	let searchResults = $state([]);
+	let showSearchResults = $state(false);
 	let isSearching = $state(false);
-	let isDrawingRoof = $state(false);
+	let roofPolygons = $state([]);
+	let currentPolygon = $state(null);
+	let isDrawing = $state(false);
+	let panelWidth = $state(1.65); // meters
+	let panelHeight = $state(1.0); // meters
+	let panelSpacing = $state(0.1); // meters between panels
+	let searchTimeout = $state(null);
 
-	// Derived calculations
-	const solarAnalysis = $derived(() => {
-		if (!currentRoof) return null;
-		return calculateSolarPotential(currentRoof.area, panelConfig);
+	// Calculated values
+	let totalRoofArea = $derived(roofPolygons.reduce((sum, polygon) => sum + polygon.area, 0));
+
+	let panelArea = $derived(panelWidth * panelHeight);
+	let panelWithSpacing = $derived((panelWidth + panelSpacing) * (panelHeight + panelSpacing));
+	let estimatedPanels = $derived(Math.floor(totalRoofArea / panelWithSpacing));
+	let totalPanelArea = $derived(estimatedPanels * panelArea);
+	let coveragePercentage = $derived(totalRoofArea > 0 ? (totalPanelArea / totalRoofArea) * 100 : 0);
+
+	onMount(async () => {
+		// Add Leaflet CSS for 2.0.0-alpha.1
+		const leafletCSS = document.createElement('link');
+		leafletCSS.rel = 'stylesheet';
+		leafletCSS.href = 'https://unpkg.com/leaflet@2.0.0-alpha.1/dist/leaflet.css';
+		document.head.appendChild(leafletCSS);
+
+		// Wait for CSS to load
+		await new Promise((resolve) => {
+			leafletCSS.onload = resolve;
+		});
+
+		// Import Leaflet 2.0.0-alpha.1 from unpkg
+		const leafletScript = document.createElement('script');
+		leafletScript.src = 'https://unpkg.com/leaflet@2.0.0-alpha.1/dist/leaflet.js';
+		document.head.appendChild(leafletScript);
+
+		await new Promise((resolve) => {
+			leafletScript.onload = resolve;
+		});
+
+		leaflet = window.L;
+
+		// Initialize map
+		map = leaflet.map('map').setView([52.520008, 13.404954], 13); // Berlin default
+
+		// Add satellite imagery as default
+		const satellite = leaflet
+			.tileLayer(
+				'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+				{
+					attribution: 'Tiles © Esri',
+					maxZoom: 20
+				}
+			)
+			.addTo(map);
+
+		// Add street layer
+		const street = leaflet.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+			attribution: '© OpenStreetMap contributors',
+			maxZoom: 19
+		});
+
+		const baseMaps = {
+			Satellite: satellite,
+			Street: street
+		};
+
+		leaflet.control.layers(baseMaps).addTo(map);
+
+		// Add drawing functionality
+		map.on('click', handleMapClick);
 	});
 
-	// --- Side Effects ($effect) ---
-	$effect(() => {
-		savePanelConfig(panelConfig);
-	});
-
-	$effect(() => {
-		saveCurrentRoof(currentRoof);
-	});
-
-	// --- Functions ---
-
-	// Address Search
-	async function searchAddress(): Promise<void> {
-		if (!searchQuery.trim()) return;
+	async function searchLocation(selectedResult = null) {
+		const query = selectedResult || searchAddress;
+		if (!query.trim()) return;
 
 		isSearching = true;
-		searchResults = [];
+		showSearchResults = false;
 
 		try {
 			const response = await fetch(
-				`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=5&addressdetails=1`
+				`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1`
 			);
-			const results = await response.json();
-			searchResults = results.map((result: any) => ({
-				display_name: result.display_name,
-				lat: parseFloat(result.lat),
-				lon: parseFloat(result.lon),
-				importance: result.importance
-			}));
+			const data = await response.json();
+
+			if (data.length > 0) {
+				const lat = parseFloat(data[0].lat);
+				const lon = parseFloat(data[0].lon);
+				map.setView([lat, lon], 20);
+
+				// Add a marker for the searched location
+				if (window.searchMarker) {
+					map.removeLayer(window.searchMarker);
+				}
+				window.searchMarker = leaflet
+					.marker([lat, lon])
+					.addTo(map)
+					.bindPopup(`📍 ${data[0].display_name}`)
+					.openPopup();
+			}
 		} catch (error) {
-			console.error('Search error:', error);
+			console.error('Search failed:', error);
 		} finally {
 			isSearching = false;
 		}
 	}
 
-	function handleAddressSelect(result: SearchResult): void {
-		searchResults = [];
-		searchQuery = result.display_name.split(',')[0];
-	}
-
-	// Roof Management
-	function handleStartDrawing(): void {
-		if (currentRoof) {
-			if (!confirm('This will replace your current roof. Continue?')) {
-				return;
-			}
-			clearCurrentRoof();
+	async function searchPreview() {
+		if (!searchAddress.trim() || searchAddress.length < 3) {
+			searchResults = [];
+			showSearchResults = false;
+			return;
 		}
-		isDrawingRoof = true;
+
+		try {
+			const response = await fetch(
+				`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchAddress)}&limit=5`
+			);
+			const data = await response.json();
+			searchResults = data.slice(0, 5);
+			showSearchResults = searchResults.length > 0;
+		} catch (error) {
+			console.error('Search preview failed:', error);
+			searchResults = [];
+			showSearchResults = false;
+		}
 	}
 
-	function handleRoofDrawn(latlngs: L.LatLng[]): void {
-		const area = calculatePolygonArea(latlngs);
-		currentRoof = {
-			id: Date.now(),
-			latlngs: latlngs,
-			area: area
+	function handleSearchInput() {
+		if (searchTimeout) {
+			clearTimeout(searchTimeout);
+		}
+		searchTimeout = setTimeout(searchPreview, 300);
+	}
+
+	function selectSearchResult(result) {
+		searchAddress = result.display_name;
+		showSearchResults = false;
+		searchLocation(result.display_name);
+	}
+
+	function hideSearchResults() {
+		setTimeout(() => {
+			showSearchResults = false;
+		}, 200);
+	}
+
+	function startDrawing() {
+		isDrawing = true;
+		currentPolygon = {
+			points: [],
+			leafletPolygon: null,
+			area: 0
 		};
-		isDrawingRoof = false;
+		map.getContainer().style.cursor = 'crosshair';
 	}
 
-	function handleRoofEdited(latlngs: L.LatLng[]): void {
-		if (currentRoof) {
-			const area = calculatePolygonArea(latlngs);
-			currentRoof = {
-				...currentRoof,
-				latlngs: latlngs,
-				area: area
-			};
+	function stopDrawing() {
+		isDrawing = false;
+		currentPolygon = null;
+		map.getContainer().style.cursor = '';
+	}
+
+	function handleMapClick(e) {
+		if (!isDrawing) return;
+
+		currentPolygon.points.push([e.latlng.lat, e.latlng.lng]);
+
+		if (currentPolygon.leafletPolygon) {
+			map.removeLayer(currentPolygon.leafletPolygon);
+		}
+
+		if (currentPolygon.points.length >= 2) {
+			currentPolygon.leafletPolygon = leaflet
+				.polygon(currentPolygon.points, {
+					color: 'blue',
+					fillColor: 'rgba(0, 100, 255, 0.3)',
+					weight: 2
+				})
+				.addTo(map);
 		}
 	}
 
-	function clearCurrentRoof(): void {
-		currentRoof = null;
-		isDrawingRoof = false;
+	function finishPolygon() {
+		if (!currentPolygon || currentPolygon.points.length < 3) return;
+
+		// Calculate area using Shoelace formula
+		const area = calculatePolygonArea(currentPolygon.points);
+		currentPolygon.area = area;
+
+		// Style the finished polygon
+		currentPolygon.leafletPolygon.setStyle({
+			color: 'green',
+			fillColor: 'rgba(0, 255, 0, 0.3)'
+		});
+
+		// Add popup with area info
+		currentPolygon.leafletPolygon.bindPopup(`
+      <div class="text-sm">
+        <strong>Roof Area:</strong> ${area.toFixed(2)} m²<br>
+        <strong>Est. Panels:</strong> ${Math.floor(area / panelWithSpacing)}<br>
+        <button onclick="removePolygon(${roofPolygons.length})" class="btn btn-xs btn-error mt-1">Remove</button>
+      </div>
+    `);
+
+		roofPolygons.push(currentPolygon);
+		stopDrawing();
 	}
 
-	function handleCancelDrawing(): void {
-		isDrawingRoof = false;
+	function calculatePolygonArea(points) {
+		if (points.length < 3) return 0;
+
+		// Convert lat/lng to approximate meters using Web Mercator projection
+		const toRadians = (deg) => deg * (Math.PI / 180);
+		const earthRadius = 6371000; // meters
+
+		let area = 0;
+		const n = points.length;
+
+		for (let i = 0; i < n; i++) {
+			const j = (i + 1) % n;
+			const lat1 = toRadians(points[i][0]);
+			const lon1 = toRadians(points[i][1]);
+			const lat2 = toRadians(points[j][0]);
+			const lon2 = toRadians(points[j][1]);
+
+			area += (lon2 - lon1) * (2 + Math.sin(lat1) + Math.sin(lat2));
+		}
+
+		area = Math.abs((area * earthRadius * earthRadius) / 2);
+		return area;
 	}
 
-	// Panel Configuration
-	function updatePanelConfig(updates: Partial<PanelConfig>): void {
-		panelConfig = { ...panelConfig, ...updates };
-	}
-
-	// Data Management
-	function clearAllData(): void {
-		if (confirm('Are you sure you want to clear all data? This cannot be undone.')) {
-			clearCurrentRoof();
-			try {
-				localStorage.removeItem('panelConfig');
-				localStorage.removeItem('currentRoof');
-			} catch (error) {
-				console.warn('Could not clear localStorage:', error);
+	function clearAllPolygons() {
+		roofPolygons.forEach((polygon) => {
+			if (polygon.leafletPolygon) {
+				map.removeLayer(polygon.leafletPolygon);
 			}
-		}
+		});
+		roofPolygons = [];
 	}
-</script>
 
-<svelte:head>
-	<title>Solar Panel Roof Planner</title>
-</svelte:head>
+	// Make removePolygon available globally for popup buttons
+	globalThis.removePolygon = function (index) {
+		const polygon = roofPolygons[index];
+		if (polygon && polygon.leafletPolygon) {
+			map.removeLayer(polygon.leafletPolygon);
+		}
+		roofPolygons.splice(index, 1);
+		roofPolygons = roofPolygons; // Trigger reactivity
+	};
+</script>
 
 <div class="bg-base-100 min-h-screen">
 	<!-- Header -->
-	<div class="navbar bg-primary text-primary-content shadow-lg">
+	<div class="navbar bg-primary text-primary-content">
 		<div class="flex-1">
-			<h1 class="btn btn-ghost text-xl normal-case">☀️ Solar Panel Roof Planner</h1>
-		</div>
-		<div class="flex-none">
-			<button class="btn btn-ghost btn-circle" onclick={clearAllData} title="Clear All Data">
-				🗑️
-			</button>
+			<h1 class="text-xl font-bold">Solar Panel Roof Planner</h1>
 		</div>
 	</div>
 
-	<div class="flex h-[calc(100vh-4rem)] flex-col lg:flex-row">
-		<!-- Sidebar -->
-		<Sidebar
-			{searchQuery}
-			{searchResults}
-			{isSearching}
-			{currentRoof}
-			{panelConfig}
-			{solarAnalysis}
-			{isDrawingRoof}
-			onSearchQueryUpdate={(query) => (searchQuery = query)}
-			onSearchAddress={searchAddress}
-			onAddressSelect={handleAddressSelect}
-			onStartDrawing={handleStartDrawing}
-			onClearRoof={clearCurrentRoof}
-			onPanelConfigUpdate={updatePanelConfig}
-		/>
+	<div class="flex h-screen flex-col lg:flex-row">
+		<!-- Control Panel -->
+		<div class="bg-base-200 w-full overflow-y-auto p-4 lg:w-80">
+			<!-- Address Search -->
+			<div class="card bg-base-100 mb-4 shadow-xl">
+				<div class="card-body">
+					<h2 class="card-title">Search Location</h2>
+					<div class="form-control relative">
+						<div class="input-group">
+							<input
+								type="text"
+								placeholder="Enter address..."
+								class="input input-bordered flex-1"
+								bind:value={searchAddress}
+								oninput={handleSearchInput}
+								onfocus={() => searchAddress.length >= 3 && searchPreview()}
+								onblur={hideSearchResults}
+								onkeydown={(e) => e.key === 'Enter' && searchLocation()}
+							/>
+							<button
+								class="btn btn-primary"
+								onclick={() => searchLocation()}
+								disabled={isSearching}
+							>
+								{#if isSearching}
+									<span class="loading loading-spinner loading-xs"></span>
+								{:else}
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										class="h-4 w-4"
+										fill="none"
+										viewBox="0 0 24 24"
+										stroke="currentColor"
+									>
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											stroke-width="2"
+											d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+										/>
+									</svg>
+								{/if}
+							</button>
+						</div>
 
-		<!-- Map Container -->
+						<!-- Search Results Dropdown -->
+						{#if showSearchResults && searchResults.length > 0}
+							<div class="absolute top-full right-0 left-0 z-50 mt-1">
+								<ul
+									class="menu bg-base-100 rounded-box border-base-300 max-h-60 overflow-y-auto border shadow-lg"
+								>
+									{#each searchResults as result}
+										<li>
+											<button
+												class="hover:bg-base-200 p-2 text-left text-sm"
+												onmousedown={() => selectSearchResult(result)}
+											>
+												<div>
+													<div class="truncate font-medium">
+														{result.display_name.split(',')[0]}
+													</div>
+													<div class="truncate text-xs opacity-60">{result.display_name}</div>
+												</div>
+											</button>
+										</li>
+									{/each}
+								</ul>
+							</div>
+						{/if}
+					</div>
+
+					{#if searchAddress && !isSearching}
+						<div class="mt-2 text-xs opacity-60">
+							Press Enter to search or select from dropdown suggestions
+						</div>
+					{/if}
+				</div>
+			</div>
+
+			<!-- Drawing Controls -->
+			<div class="card bg-base-100 mb-4 shadow-xl">
+				<div class="card-body">
+					<h2 class="card-title">Draw Roof Polygons</h2>
+					<div class="mb-2 flex gap-2">
+						{#if !isDrawing}
+							<button class="btn btn-secondary btn-sm" onclick={startDrawing}>
+								Start Drawing
+							</button>
+						{:else}
+							<button class="btn btn-success btn-sm" onclick={finishPolygon}>
+								Finish Polygon
+							</button>
+							<button class="btn btn-warning btn-sm" onclick={stopDrawing}> Cancel </button>
+						{/if}
+					</div>
+					{#if roofPolygons.length > 0}
+						<button class="btn btn-error btn-sm" onclick={clearAllPolygons}> Clear All </button>
+					{/if}
+					{#if isDrawing}
+						<div class="alert alert-info">
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								class="h-6 w-6 shrink-0 stroke-current"
+								fill="none"
+								viewBox="0 0 24 24"
+							>
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									stroke-width="2"
+									d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+								/>
+							</svg>
+							<span>Click on the map to add points to your roof polygon</span>
+						</div>
+					{/if}
+				</div>
+			</div>
+
+			<!-- Panel Configuration -->
+			<div class="card bg-base-100 mb-4 shadow-xl">
+				<div class="card-body">
+					<h2 class="card-title">Panel Configuration</h2>
+					<div class="form-control">
+						<label class="label">
+							<span class="label-text">Panel Width (m)</span>
+						</label>
+						<input
+							type="number"
+							step="0.01"
+							class="input input-bordered input-sm"
+							bind:value={panelWidth}
+						/>
+					</div>
+					<div class="form-control">
+						<label class="label">
+							<span class="label-text">Panel Height (m)</span>
+						</label>
+						<input
+							type="number"
+							step="0.01"
+							class="input input-bordered input-sm"
+							bind:value={panelHeight}
+						/>
+					</div>
+					<div class="form-control">
+						<label class="label">
+							<span class="label-text">Panel Spacing (m)</span>
+						</label>
+						<input
+							type="number"
+							step="0.01"
+							class="input input-bordered input-sm"
+							bind:value={panelSpacing}
+						/>
+					</div>
+				</div>
+			</div>
+
+			<!-- Results -->
+			<div class="card bg-base-100 shadow-xl">
+				<div class="card-body">
+					<h2 class="card-title">Solar Panel Summary</h2>
+					<div class="stats stats-vertical shadow">
+						<div class="stat">
+							<div class="stat-title">Total Roof Area</div>
+							<div class="stat-value text-lg">{totalRoofArea.toFixed(2)} m²</div>
+						</div>
+						<div class="stat">
+							<div class="stat-title">Estimated Panels</div>
+							<div class="stat-value text-lg">{estimatedPanels}</div>
+						</div>
+						<div class="stat">
+							<div class="stat-title">Panel Coverage Area</div>
+							<div class="stat-value text-lg">{totalPanelArea.toFixed(2)} m²</div>
+						</div>
+						<div class="stat">
+							<div class="stat-title">Coverage Percentage</div>
+							<div class="stat-value text-lg">{coveragePercentage.toFixed(1)}%</div>
+						</div>
+					</div>
+
+					{#if estimatedPanels > 0}
+						<div class="mt-4">
+							<div class="text-sm opacity-70">
+								Panel size: {panelWidth}m × {panelHeight}m = {panelArea.toFixed(2)} m² each
+							</div>
+							<div class="text-sm opacity-70">
+								With spacing: {(panelWidth + panelSpacing).toFixed(2)}m × {(
+									panelHeight + panelSpacing
+								).toFixed(2)}m per panel
+							</div>
+						</div>
+					{/if}
+				</div>
+			</div>
+		</div>
+
+		<!-- Map -->
 		<div class="relative flex-1">
-			<MapContainer
-				{currentRoof}
-				{isDrawingRoof}
-				{solarAnalysis}
-				onRoofDrawn={handleRoofDrawn}
-				onRoofEdited={handleRoofEdited}
-				onRoofDeleted={clearCurrentRoof}
-				onAddressSelect={handleAddressSelect}
-			/>
-
-			{#if isDrawingRoof}
-				<DrawingModeOverlay onCancel={handleCancelDrawing} />
-			{/if}
+			<div id="map" class="h-full w-full"></div>
 		</div>
 	</div>
 </div>
+
+<style>
+	:global(#map) {
+		height: 100%;
+		width: 100%;
+		z-index: 1;
+	}
+
+	:global(.leaflet-container) {
+		font-family: inherit;
+	}
+
+	:global(.leaflet-popup-content) {
+		font-family: inherit;
+	}
+
+	/* Ensure search dropdown appears above map */
+	.relative {
+		position: relative;
+	}
+
+	/* Fix for leaflet attribution position */
+	:global(.leaflet-control-attribution) {
+		font-size: 10px;
+	}
+</style>
