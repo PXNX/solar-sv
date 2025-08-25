@@ -9,6 +9,8 @@
 	import IconX from '~icons/heroicons/x-mark';
 	import IconTrash from '~icons/heroicons/trash';
 	import IconSun from '~icons/heroicons/sun';
+	import IconCamera from '~icons/heroicons/camera';
+	import IconDocumentArrowDown from '~icons/heroicons/document-arrow-down';
 
 	// Svelte 5 runes
 	let map = $state(null);
@@ -23,20 +25,27 @@
 	let panelWidth = $state(1.65);
 	let panelHeight = $state(1.0);
 	let panelSpacing = $state(0.1);
+	let costPerPanel = $state(500); // New: Cost per panel in currency
 	let searchTimeout = $state(null);
 	let mapInitialized = $state(false);
 	let currentMapLayer = $state('satellite');
 	let satelliteLayer = $state(null);
 	let streetLayer = $state(null);
 	let tempMarkers = $state([]);
+	let isExporting = $state(false);
+	let showElevationDialog = $state(false);
+	let currentElevationAngle = $state(30); // Default roof angle in degrees
 
 	// Calculated values
-	let totalRoofArea = $derived(roofPolygons.reduce((sum, polygon) => sum + polygon.area, 0));
+	let totalRoofArea = $derived(
+		roofPolygons.reduce((sum, polygon) => sum + polygon.effectiveArea, 0)
+	);
 	let panelArea = $derived(panelWidth * panelHeight);
 	let panelWithSpacing = $derived((panelWidth + panelSpacing) * (panelHeight + panelSpacing));
 	let estimatedPanels = $derived(Math.floor(totalRoofArea / panelWithSpacing));
 	let totalPanelArea = $derived(estimatedPanels * panelArea);
 	let coveragePercentage = $derived(totalRoofArea > 0 ? (totalPanelArea / totalRoofArea) * 100 : 0);
+	let totalCost = $derived(estimatedPanels * costPerPanel);
 
 	onMount(async () => {
 		try {
@@ -64,11 +73,38 @@
 
 			if (!leaflet) throw new Error('Leaflet failed to load');
 
+			// Load jsPDF and html2canvas for export functionality
+			await loadExportLibraries();
+
 			initializeMap();
 		} catch (error) {
 			console.error('Failed to initialize map:', error);
 		}
 	});
+
+	async function loadExportLibraries() {
+		// Load jsPDF
+		const jsPDFScript = document.createElement('script');
+		jsPDFScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+		document.head.appendChild(jsPDFScript);
+
+		// Load html2canvas
+		const html2canvasScript = document.createElement('script');
+		html2canvasScript.src =
+			'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+		document.head.appendChild(html2canvasScript);
+
+		await Promise.all([
+			new Promise((resolve, reject) => {
+				jsPDFScript.onload = resolve;
+				jsPDFScript.onerror = reject;
+			}),
+			new Promise((resolve, reject) => {
+				html2canvasScript.onload = resolve;
+				html2canvasScript.onerror = reject;
+			})
+		]);
+	}
 
 	function initializeMap() {
 		const mapElement = document.getElementById('map');
@@ -202,7 +238,14 @@
 	function startDrawing() {
 		if (!map) return;
 		isDrawing = true;
-		currentPolygon = { points: [], leafletPolygon: null, area: 0, panels: [] };
+		currentPolygon = {
+			points: [],
+			leafletPolygon: null,
+			area: 0,
+			effectiveArea: 0,
+			elevationAngle: 30,
+			panels: []
+		};
 		tempMarkers = [];
 		map.getContainer().style.cursor = 'crosshair';
 	}
@@ -271,6 +314,13 @@
 	function finishPolygon() {
 		if (!currentPolygon || currentPolygon.points.length < 3 || !leaflet) return;
 
+		// Show elevation dialog
+		showElevationDialog = true;
+	}
+
+	function confirmPolygon() {
+		if (!currentPolygon) return;
+
 		// Clean up temporary markers
 		tempMarkers.forEach((marker) => {
 			if (marker && map.hasLayer(marker)) {
@@ -284,9 +334,15 @@
 			map.removeLayer(currentPolygon.leafletPolygon);
 		}
 
-		// Calculate area
+		// Calculate areas
 		const area = calculatePolygonArea(currentPolygon.points);
 		currentPolygon.area = area;
+		currentPolygon.elevationAngle = currentElevationAngle;
+
+		// Calculate effective area considering roof angle
+		// cos(angle) gives the horizontal projection factor
+		const angleInRadians = (currentElevationAngle * Math.PI) / 180;
+		currentPolygon.effectiveArea = area * Math.cos(angleInRadians);
 
 		// Create final polygon with proper styling and ensure coordinates are fixed
 		const fixedPoints = currentPolygon.points.map((point) => [
@@ -305,11 +361,13 @@
 			})
 			.addTo(map);
 
-		// Add popup without the remove button dialog
-		const panelCount = Math.floor(area / panelWithSpacing);
+		// Add popup with elevation info
+		const panelCount = Math.floor(currentPolygon.effectiveArea / panelWithSpacing);
 		currentPolygon.leafletPolygon.bindPopup(`
 			<div style="font-size: 12px; font-family: inherit;">
 				<strong>Roof Area:</strong> ${area.toFixed(2)} m²<br>
+				<strong>Effective Area:</strong> ${currentPolygon.effectiveArea.toFixed(2)} m²<br>
+				<strong>Elevation Angle:</strong> ${currentElevationAngle}°<br>
 				<strong>Estimated Panels:</strong> ${panelCount}<br>
 				<button onclick="removePolygon(${roofPolygons.length})" style="margin-top: 4px; padding: 2px 8px; background: #ef4444; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 11px;">Remove</button>
 			</div>
@@ -321,9 +379,11 @@
 		// Add to roof polygons array
 		roofPolygons.push({ ...currentPolygon });
 
-		// Stop drawing mode
+		// Reset state
 		isDrawing = false;
 		currentPolygon = null;
+		showElevationDialog = false;
+		currentElevationAngle = 30;
 		map.getContainer().style.cursor = '';
 	}
 
@@ -493,6 +553,113 @@
 		roofPolygons = [];
 	}
 
+	async function exportMapImage() {
+		if (!map || !window.html2canvas) return;
+
+		isExporting = true;
+		try {
+			const mapContainer = document.getElementById('map');
+			const canvas = await window.html2canvas(mapContainer, {
+				useCORS: true,
+				allowTaint: true,
+				height: mapContainer.offsetHeight,
+				width: mapContainer.offsetWidth,
+				backgroundColor: '#ffffff'
+			});
+
+			// Create download link
+			const link = document.createElement('a');
+			link.download = 'solar-panel-plan.png';
+			link.href = canvas.toDataURL();
+			link.click();
+		} catch (error) {
+			console.error('Export failed:', error);
+		} finally {
+			isExporting = false;
+		}
+	}
+
+	async function exportPDF() {
+		if (!map || !window.jsPDF || !window.html2canvas) return;
+
+		isExporting = true;
+		try {
+			// Capture the map
+			const mapContainer = document.getElementById('map');
+			const canvas = await window.html2canvas(mapContainer, {
+				useCORS: true,
+				allowTaint: true,
+				height: mapContainer.offsetHeight,
+				width: mapContainer.offsetWidth,
+				backgroundColor: '#ffffff'
+			});
+
+			const imgData = canvas.toDataURL('image/png');
+
+			// Create PDF
+			const { jsPDF } = window.jsPDF;
+			const pdf = new jsPDF('landscape');
+
+			// Add title
+			pdf.setFontSize(20);
+			pdf.text('Solar Panel Installation Plan', 20, 20);
+
+			// Add map image
+			const imgWidth = 180;
+			const imgHeight = (canvas.height * imgWidth) / canvas.width;
+			pdf.addImage(imgData, 'PNG', 20, 40, imgWidth, imgHeight);
+
+			// Add summary data
+			const startY = 40 + imgHeight + 20;
+			pdf.setFontSize(16);
+			pdf.text('Installation Summary', 20, startY);
+
+			pdf.setFontSize(12);
+			const summaryData = [
+				`Total Roof Area: ${roofPolygons.reduce((sum, p) => sum + p.area, 0).toFixed(2)} m²`,
+				`Effective Area: ${totalRoofArea.toFixed(2)} m²`,
+				`Estimated Panels: ${estimatedPanels}`,
+				`Panel Coverage: ${coveragePercentage.toFixed(1)}%`,
+				`Total Panel Area: ${totalPanelArea.toFixed(2)} m²`,
+				`Estimated Cost: €${totalCost.toLocaleString()}`,
+				`Panel Specifications: ${panelWidth}m × ${panelHeight}m`,
+				`Panel Spacing: ${panelSpacing}m`,
+				`Cost per Panel: €${costPerPanel}`
+			];
+
+			summaryData.forEach((line, index) => {
+				pdf.text(line, 20, startY + 15 + index * 8);
+			});
+
+			// Add roof details
+			if (roofPolygons.length > 0) {
+				const roofStartY = startY + 15 + summaryData.length * 8 + 15;
+				pdf.setFontSize(14);
+				pdf.text('Roof Details', 20, roofStartY);
+
+				pdf.setFontSize(10);
+				roofPolygons.forEach((polygon, index) => {
+					const roofData = [
+						`Roof ${index + 1}: ${polygon.area.toFixed(2)} m² (${polygon.elevationAngle}° angle)`,
+						`  Effective Area: ${polygon.effectiveArea.toFixed(2)} m²`,
+						`  Panels: ${Math.floor(polygon.effectiveArea / panelWithSpacing)}`
+					];
+
+					roofData.forEach((line, lineIndex) => {
+						pdf.text(line, 25, roofStartY + 15 + index * 25 + lineIndex * 8);
+					});
+				});
+			}
+
+			// Save PDF
+			pdf.save('solar-panel-plan.pdf');
+		} catch (error) {
+			console.error('PDF export failed:', error);
+		} finally {
+			isExporting = false;
+		}
+	}
+
 	// Watch for panel setting changes and redraw panels
 	$effect(() => {
 		if (mapInitialized && roofPolygons.length > 0) {
@@ -635,6 +802,24 @@
 			</div>
 
 			{#if roofPolygons.length > 0}
+				<div class="mb-2 flex gap-2">
+					<button class="btn btn-info btn-sm" onclick={exportMapImage} disabled={isExporting}>
+						{#if isExporting}
+							<span class="loading loading-spinner loading-xs"></span>
+						{:else}
+							<IconCamera class="h-4 w-4" />
+						{/if}
+						Export Image
+					</button>
+					<button class="btn btn-success btn-sm" onclick={exportPDF} disabled={isExporting}>
+						{#if isExporting}
+							<span class="loading loading-spinner loading-xs"></span>
+						{:else}
+							<IconDocumentArrowDown class="h-4 w-4" />
+						{/if}
+						Export PDF
+					</button>
+				</div>
 				<button class="btn btn-error btn-sm w-full" onclick={clearAllPolygons}>
 					<IconTrash class="h-4 w-4" />
 					Clear All
@@ -689,6 +874,17 @@
 					/>
 					<span class="text-xs">m</span>
 				</div>
+				<div class="flex items-center gap-2">
+					<span class="w-16 text-xs">Cost/Panel</span>
+					<input
+						type="number"
+						step="10"
+						min="0"
+						class="input input-bordered input-xs flex-1"
+						bind:value={costPerPanel}
+					/>
+					<span class="text-xs">€</span>
+				</div>
 			</div>
 		</div>
 
@@ -698,7 +894,7 @@
 				<div class="grid grid-cols-2 gap-3">
 					<div class="bg-base-100 rounded-lg p-3 text-center">
 						<div class="text-primary text-xl font-bold">{totalRoofArea.toFixed(0)}</div>
-						<div class="text-base-content/60 text-xs">m² roof</div>
+						<div class="text-base-content/60 text-xs">m² effective</div>
 					</div>
 					<div class="bg-base-100 rounded-lg p-3 text-center">
 						<div class="text-secondary text-xl font-bold">{estimatedPanels}</div>
@@ -714,6 +910,14 @@
 					</div>
 				</div>
 
+				<!-- Cost Summary -->
+				<div class="bg-base-100 mt-3 rounded-lg p-3">
+					<div class="text-center">
+						<div class="text-warning text-2xl font-bold">€{totalCost.toLocaleString()}</div>
+						<div class="text-base-content/60 text-xs">Total estimated cost</div>
+					</div>
+				</div>
+
 				{#if roofPolygons.length > 0}
 					<div class="mt-4">
 						<h4 class="mb-2 text-sm font-medium">Roof Areas</h4>
@@ -723,7 +927,10 @@
 									<div>
 										<span class="font-medium">Roof {index + 1}</span><br />
 										<span class="text-base-content/60">
-											{polygon.area.toFixed(1)} m² • {Math.floor(polygon.area / panelWithSpacing)} panels
+											{polygon.area.toFixed(1)} m² • {polygon.elevationAngle}° angle<br />
+											Effective: {polygon.effectiveArea.toFixed(1)} m² • {Math.floor(
+												polygon.effectiveArea / panelWithSpacing
+											)} panels
 										</span>
 									</div>
 									<button
@@ -762,6 +969,60 @@
 		{/if}
 	</main>
 </div>
+
+<!-- Elevation Angle Dialog -->
+{#if showElevationDialog}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+		<div class="bg-base-100 mx-4 max-w-md rounded-lg p-6 shadow-xl">
+			<h3 class="mb-4 text-lg font-semibold">Set Roof Elevation Angle</h3>
+
+			<div class="mb-6">
+				<label class="label">
+					<span class="label-text">Roof angle from horizontal (degrees)</span>
+				</label>
+				<input
+					type="range"
+					min="0"
+					max="60"
+					step="1"
+					class="range range-primary w-full"
+					bind:value={currentElevationAngle}
+				/>
+				<div class="mt-1 flex justify-between px-2 text-xs">
+					<span>0° (flat)</span>
+					<span class="font-semibold">{currentElevationAngle}°</span>
+					<span>60° (steep)</span>
+				</div>
+			</div>
+
+			<div class="bg-base-200 mb-6 rounded-lg p-3 text-sm">
+				<p><strong>Angle Effect:</strong></p>
+				<p>• Flat roof (0°): Full area available</p>
+				<p>
+					• Angled roof: Effective area = {(
+						Math.cos((currentElevationAngle * Math.PI) / 180) * 100
+					).toFixed(1)}% of actual
+				</p>
+				<p class="mt-2 text-xs opacity-70">
+					Steep roofs have less horizontal space for panels due to their angled surface.
+				</p>
+			</div>
+
+			<div class="flex justify-end gap-3">
+				<button
+					class="btn btn-ghost"
+					onclick={() => {
+						showElevationDialog = false;
+						stopDrawing();
+					}}
+				>
+					Cancel
+				</button>
+				<button class="btn btn-primary" onclick={confirmPolygon}> Confirm Roof </button>
+			</div>
+		</div>
+	</div>
+{/if}
 
 <style>
 	:global(#map) {
