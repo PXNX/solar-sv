@@ -1,10 +1,11 @@
 <!-- SolarPanelPlanner.svelte -->
 <script>
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 
 	// Svelte 5 runes
 	let map = $state(null);
 	let leaflet = $state(null);
+	let mapContainer = $state(null);
 	let searchAddress = $state('');
 	let searchResults = $state([]);
 	let showSearchResults = $state(false);
@@ -16,6 +17,7 @@
 	let panelHeight = $state(1.0); // meters
 	let panelSpacing = $state(0.1); // meters between panels
 	let searchTimeout = $state(null);
+	let mapInitialized = $state(false);
 
 	// Calculated values
 	let totalRoofArea = $derived(roofPolygons.reduce((sum, polygon) => sum + polygon.area, 0));
@@ -27,62 +29,141 @@
 	let coveragePercentage = $derived(totalRoofArea > 0 ? (totalPanelArea / totalRoofArea) * 100 : 0);
 
 	onMount(async () => {
-		// Add Leaflet CSS for 2.0.0-alpha.1
-		const leafletCSS = document.createElement('link');
-		leafletCSS.rel = 'stylesheet';
-		leafletCSS.href = 'https://unpkg.com/leaflet@2.0.0-alpha.1/dist/leaflet.css';
-		document.head.appendChild(leafletCSS);
+		try {
+			// Add Leaflet CSS - use the global version for 2.0.0-alpha.1
+			const leafletCSS = document.createElement('link');
+			leafletCSS.rel = 'stylesheet';
+			leafletCSS.href = 'https://unpkg.com/leaflet@2.0.0-alpha.1/dist/leaflet.css';
+			document.head.appendChild(leafletCSS);
 
-		// Wait for CSS to load
-		await new Promise((resolve) => {
-			leafletCSS.onload = resolve;
-		});
+			// Wait for CSS to load
+			await new Promise((resolve) => {
+				leafletCSS.onload = resolve;
+				leafletCSS.onerror = resolve; // Continue even if CSS fails
+			});
 
-		// Import Leaflet 2.0.0-alpha.1 from unpkg
-		const leafletScript = document.createElement('script');
-		leafletScript.src = 'https://unpkg.com/leaflet@2.0.0-alpha.1/dist/leaflet.js';
-		document.head.appendChild(leafletScript);
+			// Use the global version of Leaflet 2.0 alpha for backward compatibility
+			const leafletScript = document.createElement('script');
+			leafletScript.src = 'https://unpkg.com/leaflet@2.0.0-alpha.1/dist/leaflet-global.js';
+			document.head.appendChild(leafletScript);
 
-		await new Promise((resolve) => {
-			leafletScript.onload = resolve;
-		});
+			await new Promise((resolve, reject) => {
+				leafletScript.onload = resolve;
+				leafletScript.onerror = reject;
+			});
 
-		leaflet = window.L;
+			// Wait for next tick to ensure DOM is ready
+			await tick();
 
-		// Initialize map
-		map = leaflet.map('map').setView([52.520008, 13.404954], 13); // Berlin default
+			leaflet = window.L;
 
-		// Add satellite imagery as default
-		const satellite = leaflet
-			.tileLayer(
-				'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-				{
-					attribution: 'Tiles © Esri',
-					maxZoom: 20
+			if (!leaflet) {
+				throw new Error('Leaflet failed to load');
+			}
+
+			// Ensure the map container exists and has dimensions
+			const mapElement = document.getElementById('map');
+			if (!mapElement) {
+				throw new Error('Map container not found');
+			}
+
+			// Add explicit dimensions to prevent size issues
+			mapElement.style.height = '100%';
+			mapElement.style.width = '100%';
+
+			// Initialize map
+			map = leaflet.map('map', {
+				center: [52.520008, 13.404954], // Berlin default
+				zoom: 13,
+				zoomControl: true,
+				attributionControl: true
+			});
+
+			// Add satellite imagery as default
+			const satellite = leaflet
+				.tileLayer(
+					'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+					{
+						attribution: 'Tiles © Esri',
+						maxZoom: 20
+					}
+				)
+				.addTo(map);
+
+			// Add street layer
+			const street = leaflet.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+				attribution: '© OpenStreetMap contributors',
+				maxZoom: 19
+			});
+
+			const baseMaps = {
+				Satellite: satellite,
+				Street: street
+			};
+
+			leaflet.control.layers(baseMaps).addTo(map);
+
+			// Add drawing functionality
+			map.on('click', handleMapClick);
+
+			mapInitialized = true;
+
+			// Force map to resize in case container wasn't properly sized
+			setTimeout(() => {
+				if (map) {
+					map.invalidateSize();
 				}
-			)
+			}, 100);
+		} catch (error) {
+			console.error('Failed to initialize map:', error);
+			// Fallback: try with regular Leaflet if global version fails
+			try {
+				const fallbackScript = document.createElement('script');
+				fallbackScript.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+				document.head.appendChild(fallbackScript);
+
+				await new Promise((resolve) => {
+					fallbackScript.onload = resolve;
+				});
+
+				leaflet = window.L;
+				initializeMapFallback();
+			} catch (fallbackError) {
+				console.error('Fallback map initialization also failed:', fallbackError);
+			}
+		}
+	});
+
+	function initializeMapFallback() {
+		// Fallback initialization with Leaflet 1.9.4
+		const mapElement = document.getElementById('map');
+		if (!mapElement || !leaflet) return;
+
+		mapElement.style.height = '100%';
+		mapElement.style.width = '100%';
+
+		map = leaflet.map('map').setView([52.520008, 13.404954], 13);
+
+		leaflet
+			.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+				attribution: '© OpenStreetMap contributors',
+				maxZoom: 19
+			})
 			.addTo(map);
 
-		// Add street layer
-		const street = leaflet.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-			attribution: '© OpenStreetMap contributors',
-			maxZoom: 19
-		});
-
-		const baseMaps = {
-			Satellite: satellite,
-			Street: street
-		};
-
-		leaflet.control.layers(baseMaps).addTo(map);
-
-		// Add drawing functionality
 		map.on('click', handleMapClick);
-	});
+		mapInitialized = true;
+
+		setTimeout(() => {
+			if (map) {
+				map.invalidateSize();
+			}
+		}, 100);
+	}
 
 	async function searchLocation(selectedResult = null) {
 		const query = selectedResult || searchAddress;
-		if (!query.trim()) return;
+		if (!query.trim() || !map) return;
 
 		isSearching = true;
 		showSearchResults = false;
@@ -156,6 +237,7 @@
 	}
 
 	function startDrawing() {
+		if (!map) return;
 		isDrawing = true;
 		currentPolygon = {
 			points: [],
@@ -166,13 +248,14 @@
 	}
 
 	function stopDrawing() {
+		if (!map) return;
 		isDrawing = false;
 		currentPolygon = null;
 		map.getContainer().style.cursor = '';
 	}
 
 	function handleMapClick(e) {
-		if (!isDrawing) return;
+		if (!isDrawing || !currentPolygon) return;
 
 		currentPolygon.points.push([e.latlng.lat, e.latlng.lng]);
 
@@ -192,7 +275,7 @@
 	}
 
 	function finishPolygon() {
-		if (!currentPolygon || currentPolygon.points.length < 3) return;
+		if (!currentPolygon || currentPolygon.points.length < 3 || !leaflet) return;
 
 		// Calculate area using Shoelace formula
 		const area = calculatePolygonArea(currentPolygon.points);
@@ -242,6 +325,7 @@
 	}
 
 	function clearAllPolygons() {
+		if (!map) return;
 		roofPolygons.forEach((polygon) => {
 			if (polygon.leafletPolygon) {
 				map.removeLayer(polygon.leafletPolygon);
@@ -253,7 +337,7 @@
 	// Make removePolygon available globally for popup buttons
 	globalThis.removePolygon = function (index) {
 		const polygon = roofPolygons[index];
-		if (polygon && polygon.leafletPolygon) {
+		if (polygon && polygon.leafletPolygon && map) {
 			map.removeLayer(polygon.leafletPolygon);
 		}
 		roofPolygons.splice(index, 1);
@@ -272,6 +356,26 @@
 	<div class="flex h-screen flex-col lg:flex-row">
 		<!-- Control Panel -->
 		<div class="bg-base-200 w-full overflow-y-auto p-4 lg:w-80">
+			<!-- Map Status -->
+			{#if !mapInitialized}
+				<div class="alert alert-info mb-4">
+					<svg
+						xmlns="http://www.w3.org/2000/svg"
+						class="h-6 w-6 shrink-0 stroke-current"
+						fill="none"
+						viewBox="0 0 24 24"
+					>
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							stroke-width="2"
+							d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+						/>
+					</svg>
+					<span>Loading map...</span>
+				</div>
+			{/if}
+
 			<!-- Address Search -->
 			<div class="card bg-base-100 mb-4 shadow-xl">
 				<div class="card-body">
@@ -287,11 +391,12 @@
 								onfocus={() => searchAddress.length >= 3 && searchPreview()}
 								onblur={hideSearchResults}
 								onkeydown={(e) => e.key === 'Enter' && searchLocation()}
+								disabled={!mapInitialized}
 							/>
 							<button
 								class="btn btn-primary"
 								onclick={() => searchLocation()}
-								disabled={isSearching}
+								disabled={isSearching || !mapInitialized}
 							>
 								{#if isSearching}
 									<span class="loading loading-spinner loading-xs"></span>
@@ -354,7 +459,11 @@
 					<h2 class="card-title">Draw Roof Polygons</h2>
 					<div class="mb-2 flex gap-2">
 						{#if !isDrawing}
-							<button class="btn btn-secondary btn-sm" onclick={startDrawing}>
+							<button
+								class="btn btn-secondary btn-sm"
+								onclick={startDrawing}
+								disabled={!mapInitialized}
+							>
 								Start Drawing
 							</button>
 						{:else}
@@ -470,6 +579,11 @@
 		<!-- Map -->
 		<div class="relative flex-1">
 			<div id="map" class="h-full w-full"></div>
+			{#if !mapInitialized}
+				<div class="bg-base-200 bg-opacity-75 absolute inset-0 flex items-center justify-center">
+					<span class="loading loading-spinner loading-lg"></span>
+				</div>
+			{/if}
 		</div>
 	</div>
 </div>
