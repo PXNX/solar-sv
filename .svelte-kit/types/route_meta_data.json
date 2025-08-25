@@ -1,0 +1,7 @@
+{
+	"/": [],
+	"/api/export": [
+		"src/routes/api/export/+page.server.ts"
+	],
+	"/privacy-policy": []
+}
