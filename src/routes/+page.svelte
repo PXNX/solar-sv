@@ -2,8 +2,6 @@
 <script>
 	import { onMount, tick } from 'svelte';
 
-	import html2canvas from 'html2canvas';
-
 	// Icons - only essential ones
 	import IconSearch from '~icons/heroicons/magnifying-glass';
 	import IconPencil from '~icons/heroicons/pencil';
@@ -11,8 +9,8 @@
 	import IconX from '~icons/heroicons/x-mark';
 	import IconTrash from '~icons/heroicons/trash';
 	import IconSun from '~icons/heroicons/sun';
-	import IconCamera from '~icons/heroicons/camera';
-	import IconDocumentArrowDown from '~icons/heroicons/document-arrow-down';
+	import IconMapPin from '~icons/heroicons/map-pin';
+	import IconClock from '~icons/heroicons/clock';
 
 	// Svelte 5 runes
 	let map = $state(null);
@@ -27,16 +25,19 @@
 	let panelWidth = $state(1.65);
 	let panelHeight = $state(1.0);
 	let panelSpacing = $state(0.1);
-	let costPerPanel = $state(500); // New: Cost per panel in currency
+	let costPerPanel = $state(500);
 	let searchTimeout = $state(null);
 	let mapInitialized = $state(false);
 	let currentMapLayer = $state('satellite');
 	let satelliteLayer = $state(null);
 	let streetLayer = $state(null);
 	let tempMarkers = $state([]);
-	let isExporting = $state(false);
 	let showElevationDialog = $state(false);
-	let currentElevationAngle = $state(30); // Default roof angle in degrees
+	let currentElevationAngle = $state(30);
+	let currentAddress = $state('');
+	let roofHistory = $state([]);
+	let draggedPointIndex = $state(null);
+	let isDraggingPoint = $state(false);
 
 	// Calculated values
 	let totalRoofArea = $derived(
@@ -75,49 +76,53 @@
 
 			if (!leaflet) throw new Error('Leaflet failed to load');
 
-			// Load jsPDF and html2canvas for export functionality
-			await loadExportLibraries();
-
 			initializeMap();
+			loadRoofHistory();
 		} catch (error) {
 			console.error('Failed to initialize map:', error);
 		}
 	});
 
-	async function loadExportLibraries() {
-		try {
-			console.log('Loading export libraries...');
-
-			// html2canvas is imported directly, just assign to window for compatibility
-			if (!window.html2canvas) {
-				window.html2canvas = html2canvas;
-				console.log('html2canvas assigned to window object');
+	function loadRoofHistory() {
+		const stored = localStorage.getItem('solarPanelRoofHistory');
+		if (stored) {
+			try {
+				roofHistory = JSON.parse(stored);
+			} catch (error) {
+				console.error('Failed to load roof history:', error);
+				roofHistory = [];
 			}
-
-			// Load jsPDF
-			if (!window.jsPDF) {
-				console.log('Loading jsPDF...');
-				const jsPDFScript = document.createElement('script');
-				jsPDFScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
-				document.head.appendChild(jsPDFScript);
-
-				await new Promise((resolve, reject) => {
-					jsPDFScript.onload = () => {
-						console.log('jsPDF loaded successfully');
-						resolve();
-					};
-					jsPDFScript.onerror = (error) => {
-						console.error('jsPDF failed to load:', error);
-						reject(new Error('Failed to load jsPDF library'));
-					};
-				});
-			}
-
-			console.log('All export libraries ready');
-		} catch (error) {
-			console.error('Failed to load export libraries:', error);
-			throw error;
 		}
+	}
+
+	function saveRoofHistory() {
+		try {
+			localStorage.setItem('solarPanelRoofHistory', JSON.stringify(roofHistory));
+		} catch (error) {
+			console.error('Failed to save roof history:', error);
+		}
+	}
+
+	function addToHistory(address) {
+		if (!address) return;
+
+		const existing = roofHistory.findIndex((item) => item.address === address);
+		if (existing !== -1) {
+			roofHistory.splice(existing, 1);
+		}
+
+		roofHistory.unshift({
+			address,
+			timestamp: Date.now(),
+			date: new Date().toLocaleDateString()
+		});
+
+		// Keep only last 10 addresses
+		if (roofHistory.length > 10) {
+			roofHistory = roofHistory.slice(0, 10);
+		}
+
+		saveRoofHistory();
 	}
 
 	function initializeMap() {
@@ -152,10 +157,11 @@
 
 		// Add click handler
 		map.on('click', handleMapClick);
+		map.on('mousemove', handleMouseMove);
+		map.on('mouseup', handleMouseUp);
 
 		// Handle zoom events to only redraw panels, not move polygons
 		map.on('zoomend', () => {
-			// Only redraw panels after zoom is complete
 			setTimeout(redrawPanels, 50);
 		});
 
@@ -194,6 +200,7 @@
 				const lat = parseFloat(data[0].lat);
 				const lon = parseFloat(data[0].lon);
 				map.setView([lat, lon], 20);
+				currentAddress = data[0].display_name;
 
 				if (window.searchMarker) {
 					map.removeLayer(window.searchMarker);
@@ -203,6 +210,8 @@
 					.addTo(map)
 					.bindPopup(`${data[0].display_name}`)
 					.openPopup();
+
+				addToHistory(data[0].display_name);
 			}
 		} catch (error) {
 			console.error('Search failed:', error);
@@ -243,6 +252,11 @@
 		searchLocation(result.display_name);
 	}
 
+	function selectFromHistory(historyItem) {
+		searchAddress = historyItem.address;
+		searchLocation(historyItem.address);
+	}
+
 	function hideSearchResults() {
 		setTimeout(() => {
 			showSearchResults = false;
@@ -258,7 +272,8 @@
 			area: 0,
 			effectiveArea: 0,
 			elevationAngle: 30,
-			panels: []
+			panels: [],
+			address: currentAddress
 		};
 		tempMarkers = [];
 		map.getContainer().style.cursor = 'crosshair';
@@ -267,6 +282,8 @@
 	function stopDrawing() {
 		if (!map) return;
 		isDrawing = false;
+		isDraggingPoint = false;
+		draggedPointIndex = null;
 
 		// Clean up temporary markers
 		tempMarkers.forEach((marker) => {
@@ -284,13 +301,12 @@
 	}
 
 	function handleMapClick(e) {
-		if (!isDrawing || !currentPolygon || !leaflet) return;
+		if (!isDrawing || !currentPolygon || !leaflet || isDraggingPoint) return;
 
-		// Get precise click coordinates with high precision
+		// Get precise click coordinates
 		const lat = parseFloat(e.latlng.lat.toFixed(8));
 		const lng = parseFloat(e.latlng.lng.toFixed(8));
 
-		// Store coordinates with high precision to prevent drift
 		currentPolygon.points.push([lat, lng]);
 
 		// Clean up previous temporary polygon
@@ -298,18 +314,31 @@
 			map.removeLayer(currentPolygon.leafletPolygon);
 		}
 
-		// Add a point marker
-		const marker = leaflet
-			.circleMarker([lat, lng], {
-				color: '#3b82f6',
-				fillColor: '#3b82f6',
-				fillOpacity: 1,
-				radius: 4,
-				weight: 2
-			})
-			.addTo(map);
+		// Clean up old markers
+		tempMarkers.forEach((marker) => {
+			if (marker && map.hasLayer(marker)) {
+				map.removeLayer(marker);
+			}
+		});
+		tempMarkers = [];
 
-		tempMarkers.push(marker);
+		// Add markers for all points - NO DRAGGING CAPABILITY
+		currentPolygon.points.forEach((point, index) => {
+			const marker = leaflet
+				.circleMarker([point[0], point[1]], {
+					color: '#3b82f6',
+					fillColor: '#ffffff',
+					fillOpacity: 1,
+					radius: 6,
+					weight: 3,
+					className: 'polygon-point'
+				})
+				.addTo(map);
+
+			// No drag handlers - points are fixed once placed
+
+			tempMarkers.push(marker);
+		});
 
 		// Create temporary polygon if we have enough points
 		if (currentPolygon.points.length >= 2) {
@@ -325,10 +354,23 @@
 		}
 	}
 
+	function handleMouseMove(e) {
+		// No dragging functionality - this function is now simplified
+		return;
+	}
+
+	function handleMouseUp(e) {
+		// No dragging functionality - this function is now simplified
+		return;
+	}
+
+	function getClickedPointIndex(clickLatLng) {
+		// No longer needed since dragging is disabled
+		return -1;
+	}
+
 	function finishPolygon() {
 		if (!currentPolygon || currentPolygon.points.length < 3 || !leaflet) return;
-
-		// Show elevation dialog
 		showElevationDialog = true;
 	}
 
@@ -354,17 +396,20 @@
 		currentPolygon.elevationAngle = currentElevationAngle;
 
 		// Calculate effective area considering roof angle
-		// cos(angle) gives the horizontal projection factor
 		const angleInRadians = (currentElevationAngle * Math.PI) / 180;
 		currentPolygon.effectiveArea = area * Math.cos(angleInRadians);
 
-		// Create final polygon with proper styling and ensure coordinates are fixed
+		// Create final polygon with proper styling
 		const fixedPoints = currentPolygon.points.map((point) => [
 			parseFloat(point[0].toFixed(8)),
 			parseFloat(point[1].toFixed(8))
 		]);
 
 		currentPolygon.points = fixedPoints;
+		currentPolygon.address = currentAddress;
+
+		const polygonIndex = roofPolygons.length; // Get the index before adding
+
 		currentPolygon.leafletPolygon = leaflet
 			.polygon(fixedPoints, {
 				color: '#10b981',
@@ -375,20 +420,40 @@
 			})
 			.addTo(map);
 
-		// Add popup with elevation info
+		// CHANGED: Updated popup content and tooltip behavior
 		const panelCount = Math.floor(currentPolygon.effectiveArea / panelWithSpacing);
-		currentPolygon.leafletPolygon.bindPopup(`
+		const popupContent = `
 			<div style="font-size: 12px; font-family: inherit;">
 				<strong>Roof Area:</strong> ${area.toFixed(2)} m²<br>
 				<strong>Effective Area:</strong> ${currentPolygon.effectiveArea.toFixed(2)} m²<br>
 				<strong>Elevation Angle:</strong> ${currentElevationAngle}°<br>
 				<strong>Estimated Panels:</strong> ${panelCount}<br>
-				<button onclick="removePolygon(${roofPolygons.length})" style="margin-top: 4px; padding: 2px 8px; background: #ef4444; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 11px;">Remove</button>
+				<strong>Address:</strong> ${currentAddress.split(',')[0] || 'Unknown'}<br>
+				<button onclick="removePolygon(${polygonIndex})" style="margin-top: 4px; padding: 2px 8px; background: #ef4444; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 11px;">Remove</button>
 			</div>
-		`);
+		`;
 
-		// Generate and draw panels
-		generatePanels(currentPolygon);
+		// Add popup and tooltip to polygon
+		currentPolygon.leafletPolygon.bindPopup(popupContent);
+
+		// CHANGED: Add persistent tooltip for polygon info
+		currentPolygon.leafletPolygon.bindTooltip(
+			`
+			<div style="font-size: 11px;">
+				<strong>Roof ${polygonIndex + 1}</strong><br>
+				${area.toFixed(1)} m² • ${panelCount} panels<br>
+				${currentElevationAngle}° angle
+			</div>
+		`,
+			{
+				permanent: false,
+				direction: 'center',
+				className: 'roof-tooltip'
+			}
+		);
+
+		// Generate and draw panels based on roof orientation
+		generatePanelsWithOrientation(currentPolygon, polygonIndex);
 
 		// Add to roof polygons array
 		roofPolygons.push({ ...currentPolygon });
@@ -398,53 +463,143 @@
 		currentPolygon = null;
 		showElevationDialog = false;
 		currentElevationAngle = 30;
+		isDraggingPoint = false;
+		draggedPointIndex = null;
 		map.getContainer().style.cursor = '';
 	}
 
-	function generatePanels(polygon) {
+	function getRoofOrientation(points) {
+		// Use the direction of the first two points to determine panel orientation
+		if (points.length < 2) return { angle: 0, orientation: 'horizontal' };
+
+		// Calculate the vector from first to second point
+		const vector = [
+			points[1][0] - points[0][0], // lat difference
+			points[1][1] - points[0][1] // lng difference
+		];
+
+		// Calculate angle in radians, then convert to degrees
+		const angleRad = Math.atan2(vector[1], vector[0]);
+		const angleDeg = angleRad * (180 / Math.PI);
+
+		return {
+			angle: angleDeg,
+			orientation:
+				Math.abs(angleDeg) % 180 > 45 && Math.abs(angleDeg) % 180 < 135 ? 'vertical' : 'horizontal'
+		};
+	}
+
+	function generatePanelsWithOrientation(polygon, polygonIndex) {
 		if (!polygon || !polygon.points || polygon.points.length < 3) return;
 
 		polygon.panels = [];
 		const bounds = getPolygonBounds(polygon.points);
 
-		// Convert panel dimensions from meters to degrees (approximate)
-		const metersToLat = 1 / 111320; // 1 meter ≈ 1/111320 degrees latitude
-		const metersToLng = 1 / (111320 * Math.cos((bounds.center.lat * Math.PI) / 180)); // longitude varies with latitude
+		// Get the exact angle from the first two points
+		const roofInfo = getRoofOrientation(polygon.points);
+		const alignmentAngle = roofInfo.angle;
 
-		const panelLatSize = panelHeight * metersToLat;
-		const panelLngSize = panelWidth * metersToLng;
+		// Convert panel dimensions from meters to degrees
+		const metersToLat = 1 / 111320;
+		const metersToLng = 1 / (111320 * Math.cos((bounds.center.lat * Math.PI) / 180));
+
+		// Calculate panel dimensions in coordinate space
+		let panelLatSize, panelLngSize;
+
+		// Convert angle to radians for calculations
+		const angleRad = alignmentAngle * (Math.PI / 180);
+
+		// For better alignment, we'll use the angle to determine the primary axis
+		// If the angle is more vertical (closer to 90° or -90°), use vertical orientation
+		const normalizedAngle = Math.abs(alignmentAngle) % 180;
+		const useVerticalOrientation = normalizedAngle > 45 && normalizedAngle < 135;
+
+		if (useVerticalOrientation) {
+			// Panels oriented more vertically (portrait)
+			panelLatSize = panelHeight * metersToLat;
+			panelLngSize = panelWidth * metersToLng;
+		} else {
+			// Panels oriented more horizontally (landscape)
+			panelLatSize = panelWidth * metersToLat;
+			panelLngSize = panelHeight * metersToLng;
+		}
+
 		const spacingLatSize = panelSpacing * metersToLat;
 		const spacingLngSize = panelSpacing * metersToLng;
 
-		// Generate grid of panel positions with proper spacing from polygon edges
-		const startLat = bounds.south + spacingLatSize;
-		const startLng = bounds.west + spacingLngSize;
+		// Create a grid aligned with the first edge direction
+		// We'll create a rotated grid that follows the first edge alignment
 
-		for (
-			let lat = startLat;
-			lat <= bounds.north - panelLatSize - spacingLatSize;
-			lat += panelLatSize + spacingLatSize
-		) {
-			for (
-				let lng = startLng;
-				lng <= bounds.east - panelLngSize - spacingLngSize;
-				lng += panelLngSize + spacingLngSize
-			) {
-				// Define all four corners of the panel rectangle
+		// Calculate the step vectors for the grid based on the alignment angle
+		const cosAngle = Math.cos(angleRad);
+		const sinAngle = Math.sin(angleRad);
+
+		// Primary direction (along the first edge)
+		const primaryStepLat = (panelLatSize + spacingLatSize) * cosAngle;
+		const primaryStepLng = (panelLngSize + spacingLngSize) * sinAngle;
+
+		// Secondary direction (perpendicular to first edge)
+		const secondaryStepLat = -(panelLngSize + spacingLngSize) * sinAngle;
+		const secondaryStepLng = (panelLatSize + spacingLatSize) * cosAngle;
+
+		// Start from the polygon center and work outward
+		const startLat = bounds.center.lat;
+		const startLng = bounds.center.lng;
+
+		// Determine grid extents based on polygon bounds
+		const maxGridSize = Math.max(bounds.north - bounds.south, bounds.east - bounds.west);
+		const gridSteps = Math.ceil(maxGridSize / Math.min(panelLatSize, panelLngSize)) + 2;
+
+		// Generate grid points in both directions from center
+		for (let i = -gridSteps; i <= gridSteps; i++) {
+			for (let j = -gridSteps; j <= gridSteps; j++) {
+				// Calculate panel center position
+				const panelCenterLat = startLat + i * primaryStepLat + j * secondaryStepLat;
+				const panelCenterLng = startLng + i * primaryStepLng + j * secondaryStepLng;
+
+				// Calculate panel corners rotated according to the first edge angle
+				const halfLatSize = panelLatSize / 2;
+				const halfLngSize = panelLngSize / 2;
+
+				// Rotate the panel rectangle around its center
 				const panelCorners = [
-					[lat, lng],
-					[lat + panelLatSize, lng],
-					[lat + panelLatSize, lng + panelLngSize],
-					[lat, lng + panelLngSize]
+					[
+						panelCenterLat + (-halfLatSize * cosAngle - -halfLngSize * sinAngle),
+						panelCenterLng + (-halfLatSize * sinAngle + -halfLngSize * cosAngle)
+					],
+					[
+						panelCenterLat + (halfLatSize * cosAngle - -halfLngSize * sinAngle),
+						panelCenterLng + (halfLatSize * sinAngle + -halfLngSize * cosAngle)
+					],
+					[
+						panelCenterLat + (halfLatSize * cosAngle - halfLngSize * sinAngle),
+						panelCenterLng + (halfLatSize * sinAngle + halfLngSize * cosAngle)
+					],
+					[
+						panelCenterLat + (-halfLatSize * cosAngle - halfLngSize * sinAngle),
+						panelCenterLng + (-halfLatSize * sinAngle + halfLngSize * cosAngle)
+					]
 				];
 
-				// Check if ALL corners of the panel are inside the polygon
+				// Check if panel center is within bounds (rough filter)
+				if (
+					panelCenterLat < bounds.south - panelLatSize ||
+					panelCenterLat > bounds.north + panelLatSize ||
+					panelCenterLng < bounds.west - panelLngSize ||
+					panelCenterLng > bounds.east + panelLngSize
+				) {
+					continue;
+				}
+
+				// Check if all corners are inside the polygon
 				const allCornersInside = panelCorners.every((corner) =>
 					isPointInPolygon(corner, polygon.points)
 				);
 
-				// Only place panel if all corners are inside the polygon
-				if (allCornersInside) {
+				// Also check that the panel center is inside (additional safety check)
+				const centerInside = isPointInPolygon([panelCenterLat, panelCenterLng], polygon.points);
+
+				if (allCornersInside && centerInside) {
 					const panel = leaflet
 						.polygon(panelCorners, {
 							color: '#fbbf24',
@@ -455,10 +610,21 @@
 						})
 						.addTo(map);
 
-					panel.bindTooltip(`Solar Panel<br>${panelWidth}m × ${panelHeight}m`, {
-						permanent: false,
-						direction: 'center'
-					});
+					// Bind tooltip with roof information
+					panel.bindTooltip(
+						`
+					<div style="font-size: 11px;">
+						<strong>Roof ${polygonIndex + 1}</strong><br>
+						${polygon.area.toFixed(1)} m² • ${Math.floor(polygon.effectiveArea / panelWithSpacing)} panels<br>
+						${polygon.elevationAngle}° angle • ${alignmentAngle.toFixed(1)}° aligned
+					</div>
+				`,
+						{
+							permanent: false,
+							direction: 'center',
+							className: 'roof-tooltip'
+						}
+					);
 
 					polygon.panels.push(panel);
 				}
@@ -467,9 +633,7 @@
 	}
 
 	function redrawPanels() {
-		// Only redraw panels for all polygons, don't touch the polygon coordinates
-		roofPolygons.forEach((polygon) => {
-			// Remove existing panels
+		roofPolygons.forEach((polygon, index) => {
 			if (polygon.panels) {
 				polygon.panels.forEach((panel) => {
 					if (panel && map.hasLayer(panel)) {
@@ -478,8 +642,7 @@
 				});
 				polygon.panels = [];
 			}
-			// Regenerate panels using the stored polygon coordinates (which remain fixed)
-			generatePanels(polygon);
+			generatePanelsWithOrientation(polygon, index);
 		});
 	}
 
@@ -528,7 +691,7 @@
 		if (points.length < 3) return 0;
 
 		const toRadians = (deg) => deg * (Math.PI / 180);
-		const earthRadius = 6371000; // Earth radius in meters
+		const earthRadius = 6371000;
 
 		let area = 0;
 		const n = points.length;
@@ -551,11 +714,9 @@
 		if (!map) return;
 
 		roofPolygons.forEach((polygon) => {
-			// Remove polygon
 			if (polygon.leafletPolygon && map.hasLayer(polygon.leafletPolygon)) {
 				map.removeLayer(polygon.leafletPolygon);
 			}
-			// Remove panels
 			if (polygon.panels) {
 				polygon.panels.forEach((panel) => {
 					if (panel && map.hasLayer(panel)) {
@@ -567,217 +728,9 @@
 		roofPolygons = [];
 	}
 
-	async function exportMapImage() {
-		if (!map || !window.html2canvas) return;
-
-		isExporting = true;
-		try {
-			const mapContainer = document.getElementById('map');
-			const canvas = await window.html2canvas(mapContainer, {
-				useCORS: true,
-				allowTaint: true,
-				height: mapContainer.offsetHeight,
-				width: mapContainer.offsetWidth,
-				backgroundColor: '#ffffff'
-			});
-
-			// Create download link
-			const link = document.createElement('a');
-			link.download = 'solar-panel-plan.png';
-			link.href = canvas.toDataURL();
-			link.click();
-		} catch (error) {
-			console.error('Export failed:', error);
-		} finally {
-			isExporting = false;
-		}
-	}
-
-	async function exportPDF() {
-		if (!map) {
-			console.error('Map not initialized');
-			return;
-		}
-
-		// Check if jsPDF is available
-		if (!window.jsPDF) {
-			console.error('jsPDF not loaded');
-			alert('PDF library not loaded. Please refresh the page and try again.');
-			return;
-		}
-
-		isExporting = true;
-
-		try {
-			console.log('Starting PDF export...');
-
-			// Hide sidebar during capture
-			const sidebar = document.querySelector('aside');
-			const originalSidebarDisplay = sidebar?.style.display;
-			if (sidebar) sidebar.style.display = 'none';
-
-			// Capture the map using imported html2canvas directly
-			const mapContainer = document.getElementById('map');
-			console.log('Capturing map screenshot...');
-
-			const canvas = await html2canvas(mapContainer, {
-				useCORS: true,
-				allowTaint: true,
-				scale: 2,
-				height: mapContainer.offsetHeight,
-				width: mapContainer.offsetWidth,
-				backgroundColor: '#ffffff',
-				logging: false, // Set to true for debugging
-				imageTimeout: 15000,
-				removeContainer: false
-			});
-
-			console.log('Screenshot captured, creating PDF...');
-
-			// Restore sidebar
-			if (sidebar) sidebar.style.display = originalSidebarDisplay || '';
-
-			const imgData = canvas.toDataURL('image/png', 0.95);
-
-			// Create PDF
-			const { jsPDF } = window.jsPDF;
-			const pdf = new jsPDF({
-				orientation: 'landscape',
-				unit: 'mm',
-				format: 'a4'
-			});
-
-			// PDF dimensions (A4 landscape: 297 x 210 mm)
-			const pageWidth = pdf.internal.pageSize.getWidth();
-			const pageHeight = pdf.internal.pageSize.getHeight();
-			const margin = 15;
-
-			// Add title
-			pdf.setFontSize(24);
-			pdf.setFont('helvetica', 'bold');
-			pdf.text('Solar Panel Installation Plan', margin, 25);
-
-			// Add date
-			pdf.setFontSize(10);
-			pdf.setFont('helvetica', 'normal');
-			const currentDate = new Date().toLocaleDateString();
-			pdf.text(`Generated on: ${currentDate}`, pageWidth - margin - 50, 15);
-
-			// Calculate image dimensions
-			const availableWidth = pageWidth - 2 * margin;
-			const availableHeight = 120;
-
-			const imgAspectRatio = canvas.width / canvas.height;
-			let imgWidth = availableWidth;
-			let imgHeight = imgWidth / imgAspectRatio;
-
-			if (imgHeight > availableHeight) {
-				imgHeight = availableHeight;
-				imgWidth = imgHeight * imgAspectRatio;
-			}
-
-			const imgX = (pageWidth - imgWidth) / 2;
-			const imgY = 35;
-
-			// Add map image
-			pdf.addImage(imgData, 'PNG', imgX, imgY, imgWidth, imgHeight, '', 'FAST');
-
-			// Add summary data
-			const summaryStartY = imgY + imgHeight + 15;
-
-			pdf.setFontSize(16);
-			pdf.setFont('helvetica', 'bold');
-			pdf.text('Installation Summary', margin, summaryStartY);
-
-			pdf.setFontSize(11);
-			pdf.setFont('helvetica', 'normal');
-
-			const leftColumnX = margin;
-			const rightColumnX = pageWidth / 2 + 10;
-			let currentY = summaryStartY + 10;
-
-			// Summary data
-			const leftColumnData = [
-				`Total Roof Area: ${roofPolygons.reduce((sum, p) => sum + p.area, 0).toFixed(2)} m²`,
-				`Effective Area: ${totalRoofArea.toFixed(2)} m²`,
-				`Estimated Panels: ${estimatedPanels}`,
-				`Panel Coverage: ${coveragePercentage.toFixed(1)}%`,
-				`Total Panel Area: ${totalPanelArea.toFixed(2)} m²`
-			];
-
-			const rightColumnData = [
-				`Panel Dimensions: ${panelWidth}m × ${panelHeight}m`,
-				`Panel Spacing: ${panelSpacing}m`,
-				`Cost per Panel: €${costPerPanel.toLocaleString()}`,
-				`Total Estimated Cost: €${totalCost.toLocaleString()}`,
-				`Number of Roof Areas: ${roofPolygons.length}`
-			];
-
-			// Add columns
-			leftColumnData.forEach((line, index) => {
-				pdf.text(line, leftColumnX, currentY + index * 6);
-			});
-
-			rightColumnData.forEach((line, index) => {
-				pdf.text(line, rightColumnX, currentY + index * 6);
-			});
-
-			// Add individual roof details
-			if (roofPolygons.length > 0) {
-				const roofDetailsY = currentY + 40;
-
-				pdf.setFontSize(14);
-				pdf.setFont('helvetica', 'bold');
-				pdf.text('Individual Roof Areas', margin, roofDetailsY);
-
-				pdf.setFontSize(10);
-				pdf.setFont('helvetica', 'normal');
-
-				let detailY = roofDetailsY + 8;
-
-				roofPolygons.forEach((polygon, index) => {
-					const panelCount = Math.floor(polygon.effectiveArea / panelWithSpacing);
-					const roofCost = panelCount * costPerPanel;
-
-					pdf.text(`Roof ${index + 1}:`, margin, detailY);
-					pdf.text(
-						`${polygon.area.toFixed(2)} m² (${polygon.elevationAngle}°)`,
-						margin + 25,
-						detailY
-					);
-					pdf.text(`Effective: ${polygon.effectiveArea.toFixed(2)} m²`, margin + 75, detailY);
-					pdf.text(`Panels: ${panelCount}`, margin + 130, detailY);
-					pdf.text(`€${roofCost.toLocaleString()}`, margin + 165, detailY);
-
-					detailY += 6;
-				});
-			}
-
-			// Add footer
-			pdf.setFontSize(8);
-			pdf.setFont('helvetica', 'italic');
-			pdf.text('Generated by Solar Panel Planner', margin, pageHeight - 10);
-
-			// Generate filename
-			const timestamp = new Date().toISOString().slice(0, 10);
-			const filename = `solar-panel-plan-${timestamp}.pdf`;
-
-			console.log('Saving PDF...');
-			pdf.save(filename);
-
-			console.log('PDF export completed successfully');
-		} catch (error) {
-			console.error('PDF export failed:', error);
-			alert(`PDF export failed: ${error.message}`);
-		} finally {
-			isExporting = false;
-		}
-	}
-
 	// Watch for panel setting changes and redraw panels
 	$effect(() => {
 		if (mapInitialized && roofPolygons.length > 0) {
-			// Small delay to batch rapid changes
 			const timeout = setTimeout(() => {
 				redrawPanels();
 			}, 100);
@@ -788,11 +741,9 @@
 	globalThis.removePolygon = function (index) {
 		const polygon = roofPolygons[index];
 		if (polygon && map) {
-			// Remove polygon
 			if (polygon.leafletPolygon && map.hasLayer(polygon.leafletPolygon)) {
 				map.removeLayer(polygon.leafletPolygon);
 			}
-			// Remove panels
 			if (polygon.panels) {
 				polygon.panels.forEach((panel) => {
 					if (panel && map.hasLayer(panel)) {
@@ -802,7 +753,7 @@
 			}
 		}
 		roofPolygons.splice(index, 1);
-		roofPolygons = [...roofPolygons]; // Trigger reactivity
+		roofPolygons = [...roofPolygons];
 	};
 </script>
 
@@ -867,6 +818,30 @@
 			</div>
 		</div>
 
+		<!-- Address History -->
+		{#if roofHistory.length > 0}
+			<div class="border-base-300 border-b p-4">
+				<h3 class="mb-2 flex items-center gap-2 text-sm font-semibold">
+					<IconClock class="h-4 w-4" />
+					Recent Addresses
+				</h3>
+				<div class="max-h-32 space-y-1 overflow-y-auto">
+					{#each roofHistory as historyItem}
+						<button
+							class="btn btn-ghost btn-sm w-full justify-start text-left text-xs"
+							onclick={() => selectFromHistory(historyItem)}
+						>
+							<IconMapPin class="h-3 w-3 flex-shrink-0" />
+							<div class="truncate">
+								<div class="font-medium">{historyItem.address.split(',')[0]}</div>
+								<div class="text-xs opacity-60">{historyItem.date}</div>
+							</div>
+						</button>
+					{/each}
+				</div>
+			</div>
+		{/if}
+
 		<!-- Map Layer Toggle -->
 		<div class="border-base-300 border-b p-4">
 			<div class="flex">
@@ -916,24 +891,6 @@
 			</div>
 
 			{#if roofPolygons.length > 0}
-				<div class="mb-2 flex gap-2">
-					<button class="btn btn-info btn-sm" onclick={exportMapImage} disabled={isExporting}>
-						{#if isExporting}
-							<span class="loading loading-spinner loading-xs"></span>
-						{:else}
-							<IconCamera class="h-4 w-4" />
-						{/if}
-						Export Image
-					</button>
-					<button class="btn btn-success btn-sm" onclick={exportPDF} disabled={isExporting}>
-						{#if isExporting}
-							<span class="loading loading-spinner loading-xs"></span>
-						{:else}
-							<IconDocumentArrowDown class="h-4 w-4" />
-						{/if}
-						Export PDF
-					</button>
-				</div>
 				<button class="btn btn-error btn-sm w-full" onclick={clearAllPolygons}>
 					<IconTrash class="h-4 w-4" />
 					Clear All
@@ -1041,6 +998,7 @@
 									<div>
 										<span class="font-medium">Roof {index + 1}</span><br />
 										<span class="text-base-content/60">
+											{polygon.address ? polygon.address.split(',')[0] : 'Unknown'}<br />
 											{polygon.area.toFixed(1)} m² • {polygon.elevationAngle}° angle<br />
 											Effective: {polygon.effectiveArea.toFixed(1)} m² • {Math.floor(
 												polygon.effectiveArea / panelWithSpacing
@@ -1160,5 +1118,29 @@
 	:global(.leaflet-tooltip) {
 		font-family: inherit;
 		font-size: 11px;
+	}
+
+	/* CHANGED: Updated polygon point styles - no dragging capability */
+	:global(.polygon-point) {
+		cursor: default !important;
+	}
+
+	:global(.polygon-point:hover) {
+		cursor: default !important;
+		transform: scale(1.1);
+		transition: transform 0.2s ease;
+	}
+
+	/* CHANGED: Custom tooltip styling for roof information */
+	:global(.roof-tooltip) {
+		background-color: rgba(0, 0, 0, 0.8) !important;
+		color: white !important;
+		border: none !important;
+		border-radius: 4px !important;
+		padding: 4px 8px !important;
+	}
+
+	:global(.roof-tooltip::before) {
+		border-top-color: rgba(0, 0, 0, 0.8) !important;
 	}
 </style>
