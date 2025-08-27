@@ -2,6 +2,8 @@
 <script>
 	import { onMount, tick } from 'svelte';
 
+	import html2canvas from 'html2canvas';
+
 	// Icons - only essential ones
 	import IconSearch from '~icons/heroicons/magnifying-glass';
 	import IconPencil from '~icons/heroicons/pencil';
@@ -83,27 +85,39 @@
 	});
 
 	async function loadExportLibraries() {
-		// Load jsPDF
-		const jsPDFScript = document.createElement('script');
-		jsPDFScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
-		document.head.appendChild(jsPDFScript);
+		try {
+			console.log('Loading export libraries...');
 
-		// Load html2canvas
-		const html2canvasScript = document.createElement('script');
-		html2canvasScript.src =
-			'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
-		document.head.appendChild(html2canvasScript);
+			// html2canvas is imported directly, just assign to window for compatibility
+			if (!window.html2canvas) {
+				window.html2canvas = html2canvas;
+				console.log('html2canvas assigned to window object');
+			}
 
-		await Promise.all([
-			new Promise((resolve, reject) => {
-				jsPDFScript.onload = resolve;
-				jsPDFScript.onerror = reject;
-			}),
-			new Promise((resolve, reject) => {
-				html2canvasScript.onload = resolve;
-				html2canvasScript.onerror = reject;
-			})
-		]);
+			// Load jsPDF
+			if (!window.jsPDF) {
+				console.log('Loading jsPDF...');
+				const jsPDFScript = document.createElement('script');
+				jsPDFScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+				document.head.appendChild(jsPDFScript);
+
+				await new Promise((resolve, reject) => {
+					jsPDFScript.onload = () => {
+						console.log('jsPDF loaded successfully');
+						resolve();
+					};
+					jsPDFScript.onerror = (error) => {
+						console.error('jsPDF failed to load:', error);
+						reject(new Error('Failed to load jsPDF library'));
+					};
+				});
+			}
+
+			console.log('All export libraries ready');
+		} catch (error) {
+			console.error('Failed to load export libraries:', error);
+			throw error;
+		}
 	}
 
 	function initializeMap() {
@@ -580,81 +594,181 @@
 	}
 
 	async function exportPDF() {
-		if (!map || !window.jsPDF || !window.html2canvas) return;
+		if (!map) {
+			console.error('Map not initialized');
+			return;
+		}
+
+		// Check if jsPDF is available
+		if (!window.jsPDF) {
+			console.error('jsPDF not loaded');
+			alert('PDF library not loaded. Please refresh the page and try again.');
+			return;
+		}
 
 		isExporting = true;
+
 		try {
-			// Capture the map
+			console.log('Starting PDF export...');
+
+			// Hide sidebar during capture
+			const sidebar = document.querySelector('aside');
+			const originalSidebarDisplay = sidebar?.style.display;
+			if (sidebar) sidebar.style.display = 'none';
+
+			// Capture the map using imported html2canvas directly
 			const mapContainer = document.getElementById('map');
-			const canvas = await window.html2canvas(mapContainer, {
+			console.log('Capturing map screenshot...');
+
+			const canvas = await html2canvas(mapContainer, {
 				useCORS: true,
 				allowTaint: true,
+				scale: 2,
 				height: mapContainer.offsetHeight,
 				width: mapContainer.offsetWidth,
-				backgroundColor: '#ffffff'
+				backgroundColor: '#ffffff',
+				logging: false, // Set to true for debugging
+				imageTimeout: 15000,
+				removeContainer: false
 			});
 
-			const imgData = canvas.toDataURL('image/png');
+			console.log('Screenshot captured, creating PDF...');
+
+			// Restore sidebar
+			if (sidebar) sidebar.style.display = originalSidebarDisplay || '';
+
+			const imgData = canvas.toDataURL('image/png', 0.95);
 
 			// Create PDF
 			const { jsPDF } = window.jsPDF;
-			const pdf = new jsPDF('landscape');
+			const pdf = new jsPDF({
+				orientation: 'landscape',
+				unit: 'mm',
+				format: 'a4'
+			});
+
+			// PDF dimensions (A4 landscape: 297 x 210 mm)
+			const pageWidth = pdf.internal.pageSize.getWidth();
+			const pageHeight = pdf.internal.pageSize.getHeight();
+			const margin = 15;
 
 			// Add title
-			pdf.setFontSize(20);
-			pdf.text('Solar Panel Installation Plan', 20, 20);
+			pdf.setFontSize(24);
+			pdf.setFont('helvetica', 'bold');
+			pdf.text('Solar Panel Installation Plan', margin, 25);
+
+			// Add date
+			pdf.setFontSize(10);
+			pdf.setFont('helvetica', 'normal');
+			const currentDate = new Date().toLocaleDateString();
+			pdf.text(`Generated on: ${currentDate}`, pageWidth - margin - 50, 15);
+
+			// Calculate image dimensions
+			const availableWidth = pageWidth - 2 * margin;
+			const availableHeight = 120;
+
+			const imgAspectRatio = canvas.width / canvas.height;
+			let imgWidth = availableWidth;
+			let imgHeight = imgWidth / imgAspectRatio;
+
+			if (imgHeight > availableHeight) {
+				imgHeight = availableHeight;
+				imgWidth = imgHeight * imgAspectRatio;
+			}
+
+			const imgX = (pageWidth - imgWidth) / 2;
+			const imgY = 35;
 
 			// Add map image
-			const imgWidth = 180;
-			const imgHeight = (canvas.height * imgWidth) / canvas.width;
-			pdf.addImage(imgData, 'PNG', 20, 40, imgWidth, imgHeight);
+			pdf.addImage(imgData, 'PNG', imgX, imgY, imgWidth, imgHeight, '', 'FAST');
 
 			// Add summary data
-			const startY = 40 + imgHeight + 20;
-			pdf.setFontSize(16);
-			pdf.text('Installation Summary', 20, startY);
+			const summaryStartY = imgY + imgHeight + 15;
 
-			pdf.setFontSize(12);
-			const summaryData = [
+			pdf.setFontSize(16);
+			pdf.setFont('helvetica', 'bold');
+			pdf.text('Installation Summary', margin, summaryStartY);
+
+			pdf.setFontSize(11);
+			pdf.setFont('helvetica', 'normal');
+
+			const leftColumnX = margin;
+			const rightColumnX = pageWidth / 2 + 10;
+			let currentY = summaryStartY + 10;
+
+			// Summary data
+			const leftColumnData = [
 				`Total Roof Area: ${roofPolygons.reduce((sum, p) => sum + p.area, 0).toFixed(2)} m²`,
 				`Effective Area: ${totalRoofArea.toFixed(2)} m²`,
 				`Estimated Panels: ${estimatedPanels}`,
 				`Panel Coverage: ${coveragePercentage.toFixed(1)}%`,
-				`Total Panel Area: ${totalPanelArea.toFixed(2)} m²`,
-				`Estimated Cost: €${totalCost.toLocaleString()}`,
-				`Panel Specifications: ${panelWidth}m × ${panelHeight}m`,
-				`Panel Spacing: ${panelSpacing}m`,
-				`Cost per Panel: €${costPerPanel}`
+				`Total Panel Area: ${totalPanelArea.toFixed(2)} m²`
 			];
 
-			summaryData.forEach((line, index) => {
-				pdf.text(line, 20, startY + 15 + index * 8);
+			const rightColumnData = [
+				`Panel Dimensions: ${panelWidth}m × ${panelHeight}m`,
+				`Panel Spacing: ${panelSpacing}m`,
+				`Cost per Panel: €${costPerPanel.toLocaleString()}`,
+				`Total Estimated Cost: €${totalCost.toLocaleString()}`,
+				`Number of Roof Areas: ${roofPolygons.length}`
+			];
+
+			// Add columns
+			leftColumnData.forEach((line, index) => {
+				pdf.text(line, leftColumnX, currentY + index * 6);
 			});
 
-			// Add roof details
+			rightColumnData.forEach((line, index) => {
+				pdf.text(line, rightColumnX, currentY + index * 6);
+			});
+
+			// Add individual roof details
 			if (roofPolygons.length > 0) {
-				const roofStartY = startY + 15 + summaryData.length * 8 + 15;
+				const roofDetailsY = currentY + 40;
+
 				pdf.setFontSize(14);
-				pdf.text('Roof Details', 20, roofStartY);
+				pdf.setFont('helvetica', 'bold');
+				pdf.text('Individual Roof Areas', margin, roofDetailsY);
 
 				pdf.setFontSize(10);
-				roofPolygons.forEach((polygon, index) => {
-					const roofData = [
-						`Roof ${index + 1}: ${polygon.area.toFixed(2)} m² (${polygon.elevationAngle}° angle)`,
-						`  Effective Area: ${polygon.effectiveArea.toFixed(2)} m²`,
-						`  Panels: ${Math.floor(polygon.effectiveArea / panelWithSpacing)}`
-					];
+				pdf.setFont('helvetica', 'normal');
 
-					roofData.forEach((line, lineIndex) => {
-						pdf.text(line, 25, roofStartY + 15 + index * 25 + lineIndex * 8);
-					});
+				let detailY = roofDetailsY + 8;
+
+				roofPolygons.forEach((polygon, index) => {
+					const panelCount = Math.floor(polygon.effectiveArea / panelWithSpacing);
+					const roofCost = panelCount * costPerPanel;
+
+					pdf.text(`Roof ${index + 1}:`, margin, detailY);
+					pdf.text(
+						`${polygon.area.toFixed(2)} m² (${polygon.elevationAngle}°)`,
+						margin + 25,
+						detailY
+					);
+					pdf.text(`Effective: ${polygon.effectiveArea.toFixed(2)} m²`, margin + 75, detailY);
+					pdf.text(`Panels: ${panelCount}`, margin + 130, detailY);
+					pdf.text(`€${roofCost.toLocaleString()}`, margin + 165, detailY);
+
+					detailY += 6;
 				});
 			}
 
-			// Save PDF
-			pdf.save('solar-panel-plan.pdf');
+			// Add footer
+			pdf.setFontSize(8);
+			pdf.setFont('helvetica', 'italic');
+			pdf.text('Generated by Solar Panel Planner', margin, pageHeight - 10);
+
+			// Generate filename
+			const timestamp = new Date().toISOString().slice(0, 10);
+			const filename = `solar-panel-plan-${timestamp}.pdf`;
+
+			console.log('Saving PDF...');
+			pdf.save(filename);
+
+			console.log('PDF export completed successfully');
 		} catch (error) {
 			console.error('PDF export failed:', error);
+			alert(`PDF export failed: ${error.message}`);
 		} finally {
 			isExporting = false;
 		}
