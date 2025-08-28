@@ -22,9 +22,10 @@
 	let roofPolygons = $state([]);
 	let currentPolygon = $state(null);
 	let isDrawing = $state(false);
-	let panelWidth = $state(1.65);
-	let panelHeight = $state(1.0);
-	let panelSpacing = $state(0.1);
+	// CHANGED: More realistic panel dimensions (typical residential solar panel)
+	let panelWidth = $state(2.0); // Standard panel width
+	let panelHeight = $state(1.0); // Standard panel height
+	let panelSpacing = $state(0.05); // Reduced spacing for realistic installation
 	let costPerPanel = $state(500);
 	let searchTimeout = $state(null);
 	let mapInitialized = $state(false);
@@ -489,6 +490,7 @@
 		};
 	}
 
+	// CHANGED: Completely rewritten panel generation for realistic appearance
 	function generatePanelsWithOrientation(polygon, polygonIndex) {
 		if (!polygon || !polygon.points || polygon.points.length < 3) return;
 
@@ -600,13 +602,50 @@
 				const centerInside = isPointInPolygon([panelCenterLat, panelCenterLng], polygon.points);
 
 				if (allCornersInside && centerInside) {
+					// CHANGED: Create realistic solar panel appearance with multiple elements
+
+					// Main panel body (dark blue/black)
 					const panel = leaflet
 						.polygon(panelCorners, {
-							color: '#fbbf24',
-							fillColor: '#fbbf24',
+							color: '#1a1a2e',
+							fillColor: '#16213e',
 							weight: 1,
-							opacity: 0.8,
-							fillOpacity: 0.6
+							opacity: 1,
+							fillOpacity: 0.9,
+							className: 'solar-panel'
+						})
+						.addTo(map);
+
+					// Add solar cell grid lines to make it look realistic
+					const cellGridLines = createSolarCellGrid(
+						panelCorners,
+						panelCenterLat,
+						panelCenterLng,
+						cosAngle,
+						sinAngle,
+						halfLatSize,
+						halfLngSize
+					);
+					cellGridLines.forEach((line) => {
+						const gridLine = leaflet
+							.polyline(line, {
+								color: '#0f172a',
+								weight: 0.5,
+								opacity: 0.8
+							})
+							.addTo(map);
+						polygon.panels.push(gridLine);
+					});
+
+					// Add silver frame around the panel
+					const frame = leaflet
+						.polygon(panelCorners, {
+							color: '#94a3b8',
+							fillColor: 'transparent',
+							weight: 2,
+							opacity: 0.9,
+							fillOpacity: 0,
+							className: 'solar-panel-frame'
 						})
 						.addTo(map);
 
@@ -614,22 +653,74 @@
 					panel.bindTooltip(
 						`
 					<div style="font-size: 11px;">
-						<strong>Roof ${polygonIndex + 1}</strong><br>
-						${polygon.area.toFixed(1)} m² • ${Math.floor(polygon.effectiveArea / panelWithSpacing)} panels<br>
-						${polygon.elevationAngle}° angle • ${alignmentAngle.toFixed(1)}° aligned
+						<strong>Solar Panel</strong><br>
+						${panelWidth}m × ${panelHeight}m<br>
+						Roof ${polygonIndex + 1} • ${polygon.elevationAngle}° angle
 					</div>
 				`,
 						{
 							permanent: false,
 							direction: 'center',
-							className: 'roof-tooltip'
+							className: 'panel-tooltip'
 						}
 					);
 
 					polygon.panels.push(panel);
+					polygon.panels.push(frame);
 				}
 			}
 		}
+	}
+
+	// CHANGED: New function to create realistic solar cell grid
+	function createSolarCellGrid(
+		panelCorners,
+		centerLat,
+		centerLng,
+		cosAngle,
+		sinAngle,
+		halfLatSize,
+		halfLngSize
+	) {
+		const gridLines = [];
+
+		// Create a 6x10 grid of solar cells (typical for a residential panel)
+		const cellsWidth = 6;
+		const cellsHeight = 10;
+
+		// Calculate cell dimensions
+		const cellLatSize = (halfLatSize * 2) / cellsHeight;
+		const cellLngSize = (halfLngSize * 2) / cellsWidth;
+
+		// Vertical grid lines
+		for (let i = 1; i < cellsWidth; i++) {
+			const offsetLng = -halfLngSize + i * cellLngSize;
+			const startLat = centerLat + (-halfLatSize * cosAngle - offsetLng * sinAngle);
+			const startLng = centerLng + (-halfLatSize * sinAngle + offsetLng * cosAngle);
+			const endLat = centerLat + (halfLatSize * cosAngle - offsetLng * sinAngle);
+			const endLng = centerLng + (halfLatSize * sinAngle + offsetLng * cosAngle);
+
+			gridLines.push([
+				[startLat, startLng],
+				[endLat, endLng]
+			]);
+		}
+
+		// Horizontal grid lines
+		for (let i = 1; i < cellsHeight; i++) {
+			const offsetLat = -halfLatSize + i * cellLatSize;
+			const startLat = centerLat + (offsetLat * cosAngle - -halfLngSize * sinAngle);
+			const startLng = centerLng + (offsetLat * sinAngle + -halfLngSize * cosAngle);
+			const endLat = centerLat + (offsetLat * cosAngle - halfLngSize * sinAngle);
+			const endLng = centerLng + (offsetLat * sinAngle + halfLngSize * cosAngle);
+
+			gridLines.push([
+				[startLat, startLng],
+				[endLat, endLng]
+			]);
+		}
+
+		return gridLines;
 	}
 
 	function redrawPanels() {
@@ -914,8 +1005,8 @@
 					<input
 						type="number"
 						step="0.01"
-						min="0.1"
-						max="5"
+						min="0.5"
+						max="3"
 						class="input input-bordered input-xs flex-1"
 						bind:value={panelWidth}
 					/>
@@ -926,8 +1017,8 @@
 					<input
 						type="number"
 						step="0.01"
-						min="0.1"
-						max="5"
+						min="0.5"
+						max="3"
 						class="input input-bordered input-xs flex-1"
 						bind:value={panelHeight}
 					/>
@@ -955,6 +1046,15 @@
 						bind:value={costPerPanel}
 					/>
 					<span class="text-xs">€</span>
+				</div>
+			</div>
+
+			<!-- CHANGED: Added panel info display -->
+			<div class="bg-base-100 mt-3 rounded p-2 text-xs">
+				<div class="text-center">
+					<div class="font-medium">Panel: {panelWidth}m × {panelHeight}m</div>
+					<div class="text-base-content/60">Area: {panelArea.toFixed(2)} m²</div>
+					<div class="text-base-content/60">With spacing: {panelWithSpacing.toFixed(2)} m²</div>
 				</div>
 			</div>
 		</div>
@@ -989,6 +1089,17 @@
 					</div>
 				</div>
 
+				<!-- CHANGED: Enhanced energy production estimate -->
+				<div class="bg-base-100 mt-3 rounded-lg p-3">
+					<div class="text-center">
+						<div class="text-info text-lg font-bold">{(estimatedPanels * 0.4).toFixed(1)} kWp</div>
+						<div class="text-base-content/60 text-xs">Peak power capacity</div>
+						<div class="mt-1 text-xs opacity-70">
+							≈ {(estimatedPanels * 0.4 * 950).toFixed(0)} kWh/year*
+						</div>
+					</div>
+				</div>
+
 				{#if roofPolygons.length > 0}
 					<div class="mt-4">
 						<h4 class="mb-2 text-sm font-medium">Roof Areas</h4>
@@ -1016,6 +1127,14 @@
 						</div>
 					</div>
 				{/if}
+
+				<!-- CHANGED: Added energy production disclaimer -->
+				<div class="mt-4 text-xs opacity-60">
+					<p>
+						* Energy estimates based on average German solar conditions (950 kWh/kWp/year) and 400W
+						panels. Actual production varies by location, weather, and installation quality.
+					</p>
+				</div>
 			{:else}
 				<div class="text-base-content/40 py-8 text-center">
 					<IconSun class="mx-auto mb-2 h-12 w-12 opacity-40" />
@@ -1142,5 +1261,45 @@
 
 	:global(.roof-tooltip::before) {
 		border-top-color: rgba(0, 0, 0, 0.8) !important;
+	}
+
+	/* CHANGED: New realistic solar panel styling */
+	:global(.solar-panel) {
+		transition: all 0.2s ease;
+	}
+
+	:global(.solar-panel:hover) {
+		filter: brightness(1.1);
+	}
+
+	:global(.solar-panel-frame) {
+		pointer-events: none;
+	}
+
+	/* CHANGED: Panel tooltip styling */
+	:global(.panel-tooltip) {
+		background-color: rgba(20, 33, 61, 0.95) !important;
+		color: white !important;
+		border: 1px solid #94a3b8 !important;
+		border-radius: 4px !important;
+		padding: 6px 10px !important;
+		font-size: 11px !important;
+	}
+
+	:global(.panel-tooltip::before) {
+		border-top-color: rgba(20, 33, 61, 0.95) !important;
+	}
+
+	/* Ensure panels render above roof polygons but below controls */
+	:global(.leaflet-overlay-pane svg) {
+		pointer-events: auto;
+	}
+
+	:global(.leaflet-overlay-pane .solar-panel) {
+		z-index: 100;
+	}
+
+	:global(.leaflet-overlay-pane .solar-panel-frame) {
+		z-index: 101;
 	}
 </style>
