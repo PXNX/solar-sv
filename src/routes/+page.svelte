@@ -1048,15 +1048,6 @@
 					<span class="text-xs">€</span>
 				</div>
 			</div>
-
-			<!-- CHANGED: Added panel info display -->
-			<div class="bg-base-100 mt-3 rounded p-2 text-xs">
-				<div class="text-center">
-					<div class="font-medium">Panel: {panelWidth}m × {panelHeight}m</div>
-					<div class="text-base-content/60">Area: {panelArea.toFixed(2)} m²</div>
-					<div class="text-base-content/60">With spacing: {panelWithSpacing.toFixed(2)} m²</div>
-				</div>
-			</div>
 		</div>
 
 		<!-- Results -->
@@ -1089,17 +1080,6 @@
 					</div>
 				</div>
 
-				<!-- CHANGED: Enhanced energy production estimate -->
-				<div class="bg-base-100 mt-3 rounded-lg p-3">
-					<div class="text-center">
-						<div class="text-info text-lg font-bold">{(estimatedPanels * 0.4).toFixed(1)} kWp</div>
-						<div class="text-base-content/60 text-xs">Peak power capacity</div>
-						<div class="mt-1 text-xs opacity-70">
-							≈ {(estimatedPanels * 0.4 * 950).toFixed(0)} kWh/year*
-						</div>
-					</div>
-				</div>
-
 				{#if roofPolygons.length > 0}
 					<div class="mt-4">
 						<h4 class="mb-2 text-sm font-medium">Roof Areas</h4>
@@ -1127,14 +1107,6 @@
 						</div>
 					</div>
 				{/if}
-
-				<!-- CHANGED: Added energy production disclaimer -->
-				<div class="mt-4 text-xs opacity-60">
-					<p>
-						* Energy estimates based on average German solar conditions (950 kWh/kWp/year) and 400W
-						panels. Actual production varies by location, weather, and installation quality.
-					</p>
-				</div>
 			{:else}
 				<div class="text-base-content/40 py-8 text-center">
 					<IconSun class="mx-auto mb-2 h-12 w-12 opacity-40" />
