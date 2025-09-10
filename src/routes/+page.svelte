@@ -17,8 +17,8 @@
 		name: string;
 		solarPanels: SolarPanel[];
 		angle: number;
-		panelArea: number; // Total area covered by panels
-		coverage: number; // Percentage of roof covered
+		panelArea: number;
+		coverage: number;
 	}
 
 	interface SolarPanel {
@@ -34,14 +34,100 @@
 	let drawingPoints = $state<[number, number][]>([]);
 	let polygonCounter = $state(1);
 
-	// Simplified settings
+	// Canvas overlay for panels
+	let canvasOverlay: L.CanvasLayer | null = null;
+	let canvasElement: HTMLCanvasElement | null = null;
+
+	// Settings
 	let panelWidth = $state(2.0);
 	let panelHeight = $state(1.0);
 	let panelSpacing = $state(0.5);
 	let costPerPanel = $state(500);
 
-	// Performance optimization: Group panels for rendering
-	let showPanelDetails = $state(false);
+	// Create custom canvas layer class
+	class PanelCanvasLayer extends L.Layer {
+		private canvas: HTMLCanvasElement;
+		private ctx: CanvasRenderingContext2D;
+		private map: L.Map;
+		private bounds: L.LatLngBounds;
+
+		constructor() {
+			super();
+			this.canvas = document.createElement('canvas');
+			this.ctx = this.canvas.getContext('2d')!;
+			this.canvas.style.position = 'absolute';
+			this.canvas.style.top = '0';
+			this.canvas.style.left = '0';
+			this.canvas.style.pointerEvents = 'none';
+			this.canvas.style.zIndex = '200';
+		}
+
+		onAdd(map: L.Map) {
+			this.map = map;
+			map.getPanes().overlayPane?.appendChild(this.canvas);
+			map.on('viewreset', this.reset, this);
+			map.on('zoom', this.reset, this);
+			map.on('move', this.reset, this);
+			this.reset();
+			return this;
+		}
+
+		onRemove(map: L.Map) {
+			map.getPanes().overlayPane?.removeChild(this.canvas);
+			map.off('viewreset', this.reset, this);
+			map.off('zoom', this.reset, this);
+			map.off('move', this.reset, this);
+			return this;
+		}
+
+		reset = () => {
+			const size = this.map.getSize();
+			const bounds = this.map.getBounds();
+			const topLeft = this.map.latLngToContainerPoint(bounds.getNorthWest());
+
+			this.canvas.width = size.x;
+			this.canvas.height = size.y;
+			this.canvas.style.width = size.x + 'px';
+			this.canvas.style.height = size.y + 'px';
+
+			L.DomUtil.setPosition(this.canvas, topLeft);
+			this.bounds = bounds;
+			this.redraw();
+		};
+
+		redraw() {
+			if (!this.ctx || !this.map) return;
+
+			this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+			this.ctx.fillStyle = 'rgba(59, 130, 246, 0.6)'; // Blue with opacity
+			this.ctx.strokeStyle = 'rgba(29, 78, 216, 0.8)'; // Darker blue border
+			this.ctx.lineWidth = 1;
+
+			// Draw all panels
+			polygons.forEach((polygon) => {
+				polygon.solarPanels.forEach((panel) => {
+					this.drawPanel(panel.coordinates);
+				});
+			});
+		}
+
+		private drawPanel(coordinates: [number, number][]) {
+			if (coordinates.length < 3) return;
+
+			const points = coordinates.map((coord) =>
+				this.map.latLngToContainerPoint([coord[0], coord[1]])
+			);
+
+			this.ctx.beginPath();
+			this.ctx.moveTo(points[0].x, points[0].y);
+			for (let i = 1; i < points.length; i++) {
+				this.ctx.lineTo(points[i].x, points[i].y);
+			}
+			this.ctx.closePath();
+			this.ctx.fill();
+			this.ctx.stroke();
+		}
+	}
 
 	function handleMapClick(e: any) {
 		if (isDrawing) {
@@ -206,7 +292,7 @@
 				drawingPoints.length >= 2 ? calculateAngle(drawingPoints[0], drawingPoints[1]) : 0;
 			const solarPanels = generateSolarPanels(drawingPoints, angle);
 			const panelArea = solarPanels.reduce((sum, p) => sum + p.area, 0);
-			const coverage = area > 0 ? (panelArea / (area * 1000000)) * 100 : 0; // Convert km² to m²
+			const coverage = area > 0 ? (panelArea / (area * 1000000)) * 100 : 0;
 
 			const newPolygon: DrawnPolygon = {
 				id: `polygon_${Date.now()}`,
@@ -227,6 +313,9 @@
 			if (mapInstance) {
 				mapInstance.doubleClickZoom.enable();
 			}
+
+			// Redraw canvas
+			updateCanvas();
 		}
 	}
 
@@ -252,11 +341,13 @@
 
 	function deletePolygon(id: string) {
 		polygons = polygons.filter((p) => p.id !== id);
+		updateCanvas();
 	}
 
 	function clearAllPolygons() {
 		polygons = [];
 		polygonCounter = 1;
+		updateCanvas();
 	}
 
 	function formatArea(area: number): string {
@@ -279,15 +370,29 @@
 				coverage
 			};
 		});
+		updateCanvas();
 	}
 
-	// Performance: Create grouped panel polygons
-	function createPanelGroups(panels: SolarPanel[]): [number, number][][] {
-		// For performance, we could group nearby panels or sample them
-		// For now, we'll limit the number of rendered panels
-		const maxPanels = showPanelDetails ? panels.length : Math.min(panels.length, 50);
-		return panels.slice(0, maxPanels).map((panel) => panel.coordinates);
+	function updateCanvas() {
+		if (canvasOverlay) {
+			canvasOverlay.redraw();
+		}
 	}
+
+	// Initialize canvas overlay when map is ready
+	function initializeCanvas() {
+		if (mapInstance && !canvasOverlay) {
+			canvasOverlay = new PanelCanvasLayer();
+			mapInstance.addLayer(canvasOverlay);
+		}
+	}
+
+	// Watch for map instance changes
+	$effect(() => {
+		if (mapInstance) {
+			initializeCanvas();
+		}
+	});
 
 	// Computed values
 	const totalSolarPanels = $derived(polygons.reduce((sum, p) => sum + p.solarPanels.length, 0));
@@ -307,6 +412,7 @@
 				<!-- Replace with: <IconSun class="w-5 h-5 text-yellow-500" /> -->
 				☀️ Solar Designer
 			</h1>
+			<p class="mt-1 text-xs text-gray-500">Canvas-powered for high performance</p>
 		</div>
 
 		<!-- Controls -->
@@ -349,24 +455,42 @@
 						<span>Size: {panelWidth}×{panelHeight}m</span>
 						<span>Gap: {panelSpacing}m</span>
 					</div>
-					<input
-						type="range"
-						min="1"
-						max="3"
-						step="0.1"
-						bind:value={panelWidth}
-						onchange={updateSolarPanels}
-						class="h-2 w-full cursor-pointer appearance-none rounded-lg bg-gray-200"
-					/>
-					<input
-						type="range"
-						min="0.1"
-						max="1"
-						step="0.1"
-						bind:value={panelSpacing}
-						onchange={updateSolarPanels}
-						class="h-2 w-full cursor-pointer appearance-none rounded-lg bg-gray-200"
-					/>
+					<div class="space-y-1">
+						<label class="text-xs text-gray-500">Width</label>
+						<input
+							type="range"
+							min="1"
+							max="3"
+							step="0.1"
+							bind:value={panelWidth}
+							onchange={updateSolarPanels}
+							class="h-2 w-full cursor-pointer appearance-none rounded-lg bg-gray-200"
+						/>
+					</div>
+					<div class="space-y-1">
+						<label class="text-xs text-gray-500">Height</label>
+						<input
+							type="range"
+							min="0.5"
+							max="2"
+							step="0.1"
+							bind:value={panelHeight}
+							onchange={updateSolarPanels}
+							class="h-2 w-full cursor-pointer appearance-none rounded-lg bg-gray-200"
+						/>
+					</div>
+					<div class="space-y-1">
+						<label class="text-xs text-gray-500">Spacing</label>
+						<input
+							type="range"
+							min="0.1"
+							max="1"
+							step="0.1"
+							bind:value={panelSpacing}
+							onchange={updateSolarPanels}
+							class="h-2 w-full cursor-pointer appearance-none rounded-lg bg-gray-200"
+						/>
+					</div>
 				</div>
 
 				<div class="flex items-center justify-between">
@@ -382,12 +506,6 @@
 				</div>
 			</div>
 
-			<!-- Performance Toggle -->
-			<label class="flex items-center space-x-2 text-xs text-gray-600">
-				<input type="checkbox" bind:checked={showPanelDetails} class="rounded" />
-				<span>Show all panels (may be slow)</span>
-			</label>
-
 			{#if polygons.length > 0}
 				<button
 					onclick={clearAllPolygons}
@@ -397,6 +515,14 @@
 					🗑️ Clear All
 				</button>
 			{/if}
+
+			<!-- Performance Info -->
+			<div class="rounded-md border border-green-200 bg-green-50 p-2">
+				<div class="text-xs text-green-800">
+					<div class="font-medium">⚡ Canvas Rendering</div>
+					<div>Handles thousands of panels smoothly</div>
+				</div>
+			</div>
 		</div>
 
 		<!-- Sites List -->
@@ -407,11 +533,14 @@
 				<div class="mt-8 text-center text-gray-400">
 					<div class="mb-2 text-2xl">📍</div>
 					<p class="text-xs">Click "Draw Site" to start</p>
+					<p class="mt-2 text-xs text-gray-300">Canvas will render panels efficiently</p>
 				</div>
 			{:else}
 				<div class="space-y-2">
 					{#each polygons as polygon}
-						<div class="rounded-md border border-gray-200 bg-white p-3">
+						<div
+							class="rounded-md border border-gray-200 bg-white p-3 transition-colors hover:border-blue-300"
+						>
 							<div class="mb-2 flex items-start justify-between">
 								<h4 class="text-sm font-medium text-gray-900">{polygon.name}</h4>
 								<button
@@ -425,7 +554,7 @@
 							<div class="space-y-1 text-xs text-gray-600">
 								<div class="flex justify-between">
 									<span>Panels:</span>
-									<span class="font-medium">{polygon.solarPanels.length}</span>
+									<span class="font-medium">{polygon.solarPanels.length.toLocaleString()}</span>
 								</div>
 								<div class="flex justify-between">
 									<span>Coverage:</span>
@@ -491,7 +620,7 @@
 		>
 			<TileLayer url={'https://tile.openstreetmap.org/{z}/{x}/{y}.png'} />
 
-			<!-- Polygons -->
+			<!-- Only render polygon boundaries - panels are on canvas -->
 			{#each polygons as polygon}
 				<Polygon
 					latLngs={polygon.coordinates}
@@ -506,7 +635,11 @@
 						<div class="min-w-48 p-2">
 							<h3 class="mb-1 font-semibold">{polygon.name}</h3>
 							<div class="space-y-1 text-sm">
-								<div>Panels: {polygon.solarPanels.length}</div>
+								<div>
+									Panels: <span class="font-medium"
+										>{polygon.solarPanels.length.toLocaleString()}</span
+									>
+								</div>
 								<div>
 									Coverage: <span class="font-medium text-blue-600"
 										>{polygon.coverage.toFixed(1)}%</span
@@ -518,6 +651,9 @@
 										>${(polygon.solarPanels.length * costPerPanel).toLocaleString()}</span
 									>
 								</div>
+								<div class="mt-2 border-t border-gray-200 pt-2 text-xs text-gray-500">
+									📊 Rendered on canvas for performance
+								</div>
 							</div>
 							<button
 								onclick={() => deletePolygon(polygon.id)}
@@ -528,36 +664,6 @@
 						</div>
 					</Popup>
 				</Polygon>
-
-				<!-- Panels (performance optimized) -->
-				{#if showPanelDetails}
-					{#each polygon.solarPanels as panel}
-						<Polygon
-							latLngs={panel.coordinates}
-							options={{
-								color: '#1d4ed8',
-								weight: 1,
-								opacity: 0.6,
-								fillColor: '#3b82f6',
-								fillOpacity: 0.4
-							}}
-						/>
-					{/each}
-				{:else if polygon.solarPanels.length > 0}
-					<!-- Show sample panels for performance -->
-					{#each createPanelGroups(polygon.solarPanels) as panelCoords}
-						<Polygon
-							latLngs={panelCoords}
-							options={{
-								color: '#1d4ed8',
-								weight: 1,
-								opacity: 0.6,
-								fillColor: '#3b82f6',
-								fillOpacity: 0.4
-							}}
-						/>
-					{/each}
-				{/if}
 			{/each}
 
 			<!-- Drawing preview -->
