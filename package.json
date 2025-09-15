@@ -51,6 +51,7 @@
 		"dom-to-image": "2.6.0",
 		"html2canvas": "1.4.1",
 		"jsdom": "27.0.0",
+		"puppeteer": "^24.21.0",
 		"sveaflet": "^0.1.4",
 		"sveltekit-superforms": "2.27.1",
 		"valibot": "1.1.0"
