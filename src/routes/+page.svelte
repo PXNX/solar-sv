@@ -10,8 +10,8 @@
 		name: string;
 		solarPanels: SolarPanel[];
 		angle: number;
-		panelArea: number; // Total area covered by panels
-		coverage: number; // Percentage of roof covered
+		panelArea: number;
+		coverage: number;
 	}
 
 	interface SolarPanel {
@@ -21,32 +21,48 @@
 		area: number;
 	}
 
+	interface SearchResult {
+		display_name: string;
+		lat: string;
+		lon: string;
+	}
+
 	let polygons = $state<DrawnPolygon[]>([]);
 	let isDrawing = $state(false);
-	let mapInstance: L.Map | null = $state(null);
+	let mapInstance: L.Map | undefined = $state();
 	let drawingPoints = $state<[number, number][]>([]);
 	let polygonCounter = $state(1);
 
-	// Enhanced settings with text inputs
+	// Simplified settings
 	let panelWidth = $state(2.0);
 	let panelHeight = $state(1.0);
 	let panelSpacing = $state(0.5);
 	let costPerPanel = $state(500);
 
-	// Performance optimization: Group panels for rendering
-	let showPanelDetails = $state(false);
-	let isSettingsOpen = $state(false);
+	// Location search
+	let searchQuery = $state('');
+	let searchResults = $state<SearchResult[]>([]);
+	let isSearching = $state(false);
+	let showResults = $state(false);
+
+	// Map settings
+	let mapType = $state('osm'); // 'osm' or 'satellite'
+
+	// Debounced search
+	let searchTimeout: number;
 
 	function handleMapClick(e: any) {
 		if (isDrawing) {
 			const point: [number, number] = [e.latlng.lat, e.latlng.lng];
 			drawingPoints = [...drawingPoints, point];
 		}
+		showResults = false;
 	}
 
 	function startDrawing() {
 		isDrawing = true;
 		drawingPoints = [];
+		showResults = false;
 		if (mapInstance) {
 			mapInstance.doubleClickZoom.disable();
 		}
@@ -200,7 +216,7 @@
 				drawingPoints.length >= 2 ? calculateAngle(drawingPoints[0], drawingPoints[1]) : 0;
 			const solarPanels = generateSolarPanels(drawingPoints, angle);
 			const panelArea = solarPanels.reduce((sum, p) => sum + p.area, 0);
-			const coverage = area > 0 ? (panelArea / (area * 1000000)) * 100 : 0; // Convert km² to m²
+			const coverage = area > 0 ? (panelArea / (area * 1000000)) * 100 : 0;
 
 			const newPolygon: DrawnPolygon = {
 				id: `polygon_${Date.now()}`,
@@ -248,16 +264,9 @@
 		polygons = polygons.filter((p) => p.id !== id);
 	}
 
-	function clearAllPolygons() {
+	function clearAll() {
 		polygons = [];
 		polygonCounter = 1;
-	}
-
-	function formatArea(area: number): string {
-		if (area < 1) {
-			return `${(area * 1000000).toFixed(0)} m²`;
-		}
-		return `${area.toFixed(2)} km²`;
 	}
 
 	function updateSolarPanels() {
@@ -275,253 +284,293 @@
 		});
 	}
 
-	// Performance: Create grouped panel polygons
-	function createPanelGroups(panels: SolarPanel[]): [number, number][][] {
-		const maxPanels = showPanelDetails ? panels.length : Math.min(panels.length, 50);
-		return panels.slice(0, maxPanels).map((panel) => panel.coordinates);
-	}
+	// Location search functions
+	async function searchLocation(query: string) {
+		if (!query.trim()) {
+			searchResults = [];
+			return;
+		}
 
-	// Input validation and update functions
-	function validateAndUpdateWidth(value: string) {
-		const num = parseFloat(value);
-		if (!isNaN(num) && num > 0 && num <= 10) {
-			panelWidth = num;
-			updateSolarPanels();
+		isSearching = true;
+		try {
+			const response = await fetch(
+				`https://nominatim.openstreetmap.org/search?format=json&limit=5&q=${encodeURIComponent(query)}`
+			);
+			const results = await response.json();
+			searchResults = results;
+			showResults = true;
+		} catch (error) {
+			console.error('Search error:', error);
+			searchResults = [];
+		} finally {
+			isSearching = false;
 		}
 	}
 
-	function validateAndUpdateHeight(value: string) {
-		const num = parseFloat(value);
-		if (!isNaN(num) && num > 0 && num <= 10) {
-			panelHeight = num;
-			updateSolarPanels();
-		}
+	function handleSearchInput(event: Event) {
+		const target = event.target as HTMLInputElement;
+		searchQuery = target.value;
+
+		clearTimeout(searchTimeout);
+		searchTimeout = setTimeout(() => {
+			searchLocation(searchQuery);
+		}, 300);
 	}
 
-	function validateAndUpdateSpacing(value: string) {
-		const num = parseFloat(value);
-		if (!isNaN(num) && num >= 0 && num <= 5) {
-			panelSpacing = num;
-			updateSolarPanels();
-		}
-	}
+	function selectLocation(result: SearchResult) {
+		const lat = parseFloat(result.lat);
+		const lon = parseFloat(result.lon);
 
-	function validateAndUpdateCost(value: string) {
-		const num = parseFloat(value);
-		if (!isNaN(num) && num > 0 && num <= 10000) {
-			costPerPanel = num;
+		if (mapInstance) {
+			mapInstance.setView([lat, lon], 18); // Increased zoom level from 16 to 18
 		}
+
+		searchQuery = result.display_name;
+		showResults = false;
 	}
 
 	// Computed values
 	const totalSolarPanels = $derived(polygons.reduce((sum, p) => sum + p.solarPanels.length, 0));
-	const totalSolarArea = $derived(polygons.reduce((sum, p) => sum + p.panelArea, 0));
 	const totalCost = $derived(totalSolarPanels * costPerPanel);
-	const avgCoverage = $derived(
-		polygons.length > 0 ? polygons.reduce((sum, p) => sum + p.coverage, 0) / polygons.length : 0
-	);
+
+	// Get next point color
+	function getNextPointColor(): string {
+		if (drawingPoints.length === 0) return '#ef4444'; // red
+		if (drawingPoints.length === 1) return '#22c55e'; // green
+		return '#3b82f6'; // blue
+	}
 </script>
 
 <div class="bg-base-200 flex h-screen">
-	<!-- Modern Sidebar -->
-	<div class="bg-base-100 flex w-90 flex-col shadow-xl">
-		<!-- Controls -->
-		<div class="flex-1 space-y-4 overflow-y-auto p-4">
-			<div class="text-lg font-medium">Panel Configuration</div>
+	<!-- Simplified Sidebar -->
+	<div class="bg-base-100 flex w-90 flex-col space-y-3 p-2 shadow-lg">
+		<!-- Location Search -->
 
-			<div class="space-y-4">
-				<!-- Panel Dimensions -->
-				<div class="form-control">
-					<label class="label">
-						<span class="label-text font-medium">Panel Width (m)</span>
+		<div class="relative">
+			<input
+				type="text"
+				placeholder="Search location..."
+				class="input input-bordered input-md w-full"
+				bind:value={searchQuery}
+				oninput={handleSearchInput}
+				onfocus={() => (showResults = searchResults.length > 0)}
+			/>
+			{#if isSearching}
+				<span class="loading loading-spinner loading-md absolute top-2 right-2"></span>
+			{/if}
 
-						<input
-							type="number"
-							class="input input-bordered input-sm w-full"
-							min="0.1"
-							max="10"
-							step="0.1"
-							value={panelWidth}
-							oninput={(e) => validateAndUpdateWidth(e.target.value)}
-							placeholder="2.0"
-						/>
-					</label>
-				</div>
-
-				<div class="form-control">
-					<label class="label">
-						<span class="label-text font-medium">Panel Height (m)</span>
-
-						<input
-							type="number"
-							class="input input-bordered input-sm w-full"
-							min="0.1"
-							max="10"
-							step="0.1"
-							value={panelHeight}
-							oninput={(e) => validateAndUpdateHeight(e.target.value)}
-							placeholder="1.0"
-						/>
-					</label>
-				</div>
-
-				<div class="form-control">
-					<label class="label">
-						<span class="label-text font-medium">Panel Spacing (m)</span>
-
-						<input
-							type="number"
-							class="input input-bordered input-sm w-full"
-							min="0"
-							max="5"
-							step="0.1"
-							value={panelSpacing}
-							oninput={(e) => validateAndUpdateSpacing(e.target.value)}
-							placeholder="0.5"
-						/>
-					</label>
-				</div>
-
-				<div class="form-control">
-					<label class="label">
-						<span class="label-text font-medium">Cost per Panel ($)</span>
-
-						<input
-							type="number"
-							class="input input-bordered input-sm w-full"
-							min="1"
-							max="10000"
-							step="1"
-							value={costPerPanel}
-							oninput={(e) => validateAndUpdateCost(e.target.value)}
-							placeholder="500"
-						/>
-					</label>
-				</div>
-
-				<div class="form-control">
-					<label class="label cursor-pointer">
-						<span class="label-text">Show all panels (may affect performance)</span>
-						<input type="checkbox" class="toggle toggle-primary" bind:checked={showPanelDetails} />
-					</label>
-				</div>
-			</div>
-
-			<!-- Drawing Controls -->
-			<div class="card bg-base-200 shadow-lg">
-				<div class="card-body p-4">
-					{#if !isDrawing}
-						<button onclick={startDrawing} class="btn btn-primary btn-block gap-2">
-							Draw New Site
+			{#if showResults && searchResults.length > 0}
+				<div
+					class="bg-base-100 border-base-300 absolute top-full z-50 mt-1 max-h-40 w-full overflow-y-auto rounded-lg border shadow-xl"
+				>
+					{#each searchResults as result}
+						<button
+							class="hover:bg-base-200 border-base-300 text-base-content w-full border-b px-3 py-2 text-left text-xs last:border-b-0"
+							onclick={() => selectLocation(result)}
+						>
+							{result.display_name}
 						</button>
-					{:else}
-						<div class="space-y-2">
-							<button
-								onclick={finishPolygon}
-								disabled={drawingPoints.length < 3}
-								class="btn btn-success btn-block gap-2"
-							>
-								Finish Site ({drawingPoints.length})
-							</button>
-							<button onclick={cancelDrawing} class="btn btn-ghost btn-block gap-2">
-								Cancel
-							</button>
-						</div>
-					{/if}
-				</div>
-			</div>
-
-			<!-- Sites List -->
-			<div class="card bg-base-200 shadow-lg">
-				<div class="card-body p-4">
-					<div class="mb-3 flex items-center justify-between">
-						<h3 class="card-title text-lg">Sites ({polygons.length})</h3>
-						{#if polygons.length > 0}
-							<button onclick={clearAllPolygons} class="btn btn-error btn-sm gap-2">
-								Clear All
-							</button>
-						{/if}
-					</div>
-
-					{#if polygons.length === 0}
-						<div class="text-base-content/60 py-8 text-center">
-							<div class="mb-3 text-4xl">📍</div>
-							<p class="text-sm">Click "Draw New Site" to get started</p>
-						</div>
-					{:else}
-						<div class="space-y-3">
-							{#each polygons as polygon}
-								<div class="card bg-base-100 shadow-md">
-									<div class="card-body p-3">
-										<div class="mb-2 flex items-start justify-between">
-											<div class="grid grid-cols-2 gap-2 text-xs">
-												<div class="stat bg-base-200 rounded-lg p-2">
-													<div class="stat-title text-xs">Panels</div>
-													<div class="stat-value text-lg">{polygon.solarPanels.length}</div>
-												</div>
-
-												<div class="stat bg-base-200 rounded-lg p-2">
-													<div class="stat-title text-xs">Area</div>
-													<div class="stat-value text-sm">{polygon.panelArea.toFixed(0)}m²</div>
-												</div>
-											</div>
-											<button
-												onclick={() => deletePolygon(polygon.id)}
-												class="btn btn-ghost btn-xs text-error hover:bg-error hover:text-error-content"
-											>
-												Delete Site
-											</button>
-										</div>
-									</div>
-								</div>
-							{/each}
-						</div>
-					{/if}
-				</div>
-			</div>
-
-			<!-- Summary Footer -->
-			{#if polygons.length > 0}
-				<div class="from-primary to-secondary text-primary-content bg-gradient-to-r p-4">
-					<div class="stats stats-vertical text-primary-content bg-transparent shadow-none">
-						<div class="stat p-2">
-							<div class="stat-title text-primary-content/80 text-xs">Total Sites</div>
-							<div class="stat-value text-lg">{polygons.length}</div>
-						</div>
-						<div class="stat p-2">
-							<div class="stat-title text-primary-content/80 text-xs">Total Panels</div>
-							<div class="stat-value text-lg">{totalSolarPanels.toLocaleString()}</div>
-						</div>
-						<div class="stat p-2">
-							<div class="stat-title text-primary-content/80 text-xs">Avg Coverage</div>
-							<div class="stat-value text-lg">{avgCoverage.toFixed(1)}%</div>
-						</div>
-						<div class="stat p-2">
-							<div class="stat-title text-primary-content/80 text-xs">Solar Area</div>
-							<div class="stat-value text-lg">{totalSolarArea.toFixed(0)}m²</div>
-						</div>
-						<div class="stat border-primary-content/20 mt-2 border-t p-2 pt-3">
-							<div class="stat-title text-primary-content/80 font-semibold">Total Investment</div>
-							<div class="stat-value text-2xl font-bold">${totalCost.toLocaleString()}</div>
-						</div>
-					</div>
+					{/each}
 				</div>
 			{/if}
 		</div>
+
+		<div class="form-control flex flex-row gap-2">
+			<button
+				class="btn flex-1"
+				class:btn-primary={mapType === 'osm'}
+				onclick={() => (mapType = 'osm')}
+			>
+				Street
+			</button>
+			<button
+				class="btn flex-1"
+				class:btn-primary={mapType === 'satellite'}
+				onclick={() => (mapType = 'satellite')}
+			>
+				Satellite
+			</button>
+		</div>
+
+		<div class="flex flex-row gap-2">
+			{#if !isDrawing}
+				<button onclick={startDrawing} class="btn btn-primary flex-1"> Draw Site </button>
+			{:else}
+				<button
+					onclick={finishPolygon}
+					disabled={drawingPoints.length < 3}
+					class="btn btn-success flex-1"
+				>
+					Finish ({drawingPoints.length})
+				</button>
+				<button onclick={cancelDrawing} class="btn btn-ghost flex-1"> Cancel </button>
+			{/if}
+		</div>
+
+		<div class="grid grid-cols-2 gap-2">
+			<div class="form-control">
+				<label class="label-text-sm pb-1"
+					>Width (m)
+					<input
+						type="number"
+						class="input input-bordered input-sm"
+						min="0.1"
+						max="10"
+						step="0.1"
+						bind:value={panelWidth}
+						onchange={() => updateSolarPanels()}
+					/>
+				</label>
+			</div>
+			<div class="form-control">
+				<label class="label-text-sm pb-1"
+					>Height (m)
+					<input
+						type="number"
+						class="input input-bordered input-sm"
+						min="0.1"
+						max="10"
+						step="0.1"
+						bind:value={panelHeight}
+						onchange={() => updateSolarPanels()}
+					/>
+				</label>
+			</div>
+		</div>
+
+		<div class="grid grid-cols-2 gap-2">
+			<div class="form-control">
+				<label class="label-text-sm pb-1"
+					>Spacing (m)
+					<input
+						type="number"
+						class="input input-bordered input-sm"
+						min="0"
+						max="5"
+						step="0.1"
+						bind:value={panelSpacing}
+						onchange={() => updateSolarPanels()}
+					/>
+				</label>
+			</div>
+			<div class="form-control">
+				<label class="label-text-sm pb-1"
+					>Cost ($)
+					<input
+						type="number"
+						class="input input-bordered input-sm"
+						min="1"
+						max="10000"
+						bind:value={costPerPanel}
+					/>
+				</label>
+			</div>
+		</div>
+
+		{#if polygons.length === 0}
+			<div class="text-base-content/60 py-8 text-center">
+				<div class="mb-2 text-3xl">🌞</div>
+				<p class="text-sm">Draw sites to get started</p>
+			</div>
+		{:else}
+			<div class="flex-1 overflow-y-auto">
+				<div class="mb-3 flex items-center justify-between">
+					<h3 class="font-medium">Sites ({polygons.length})</h3>
+					{#if polygons.length > 0}
+						<button onclick={clearAll} class="btn btn-error btn-xs">Clear</button>
+					{/if}
+				</div>
+
+				<div class="space-y-2">
+					{#each polygons as polygon}
+						<div class="card bg-base-200 card-compact">
+							<div class="card-body">
+								<div class="grid grid-cols-4 gap-2 text-sm">
+									<div>
+										<div class="text-base-content/60">Panels</div>
+										<div class="font-semibold">{polygon.solarPanels.length}</div>
+									</div>
+									<div>
+										<div class="text-base-content/60">Coverage</div>
+										<div class="font-semibold">{polygon.coverage.toFixed(1)}%</div>
+									</div>
+									<div>
+										<div class="text-base-content/60">Cost</div>
+										<div class="font-semibold">
+											${(polygon.solarPanels.length * costPerPanel).toLocaleString()}
+										</div>
+									</div>
+
+									<button
+										onclick={() => deletePolygon(polygon.id)}
+										class="btn btn-ghost btn-xs text-error"
+									>
+										×
+									</button>
+								</div>
+							</div>
+						</div>
+					{/each}
+				</div>
+
+				<!-- Summary Footer -->
+				<div class="bg-primary text-primary-content p-4">
+					<div class="text-center">
+						<div class="text-2xl font-bold">{totalSolarPanels.toLocaleString()}</div>
+						<div class="text-sm opacity-80">panels</div>
+						<div class="mt-1 text-lg font-semibold">${totalCost.toLocaleString()}</div>
+						<div class="text-xs opacity-80">total cost</div>
+					</div>
+				</div>
+			</div>
+		{/if}
 	</div>
 
 	<!-- Map Container -->
 	<div class="relative flex-1">
+		<!-- Drawing Status -->
+		{#if isDrawing}
+			<div class="absolute top-4 right-4 z-[1000]">
+				<div class="alert alert-primary max-w-sm shadow-lg">
+					<div>
+						<div class="font-semibold">Drawing Mode</div>
+						<div class="flex items-center gap-1 text-sm">
+							<div
+								class="size-3 rounded-full"
+								style="background-color: {getNextPointColor()}"
+							></div>
+							{#if drawingPoints.length === 0}
+								Set origin point
+							{:else if drawingPoints.length === 1}
+								Set panel direction
+							{:else}
+								Add boundary points
+							{/if}
+						</div>
+					</div>
+				</div>
+			</div>
+		{/if}
+
 		<Map
 			options={{
 				center: [51.505, -0.09],
-				zoom: 16
+				zoom: 16,
+				minZoom: 1,
+				maxZoom: 20
 			}}
 			style="width:100%;height:100%;"
 			onclick={handleMapClick}
 			bind:instance={mapInstance}
 		>
-			<TileLayer url={'https://tile.openstreetmap.org/{z}/{x}/{y}.png'} />
+			{#if mapType === 'osm'}
+				<TileLayer url={'https://tile.openstreetmap.org/{z}/{x}/{y}.png'} />
+			{:else}
+				<TileLayer
+					url={'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'}
+					attribution="Tiles &copy; Esri"
+				/>
+			{/if}
 
 			<!-- Polygons -->
 			{#each polygons as polygon}
@@ -535,61 +584,34 @@
 					}}
 				>
 					<Popup>
-						<div class="min-w-48 p-2">
-							<h3 class="mb-1 font-semibold">{polygon.name}</h3>
+						<div class="p-2">
+							<h3 class="mb-2 font-semibold">{polygon.name}</h3>
 							<div class="space-y-1 text-sm">
-								<div>Panels: {polygon.solarPanels.length}</div>
+								<div>Panels: <strong>{polygon.solarPanels.length}</strong></div>
+								<div>Coverage: <strong>{polygon.coverage.toFixed(1)}%</strong></div>
 								<div>
-									Coverage: <span class="font-medium text-blue-600"
-										>{polygon.coverage.toFixed(1)}%</span
-									>
-								</div>
-								<div>Solar Area: {polygon.panelArea.toFixed(0)}m²</div>
-								<div>
-									Cost: <span class="font-medium text-green-600"
-										>${(polygon.solarPanels.length * costPerPanel).toLocaleString()}</span
+									Cost: <strong
+										>${(polygon.solarPanels.length * costPerPanel).toLocaleString()}</strong
 									>
 								</div>
 							</div>
-							<button
-								onclick={() => deletePolygon(polygon.id)}
-								class="mt-2 rounded bg-red-500 px-2 py-1 text-xs text-white hover:bg-red-600"
-							>
-								Delete
-							</button>
 						</div>
 					</Popup>
 				</Polygon>
 
-				<!-- Panels (performance optimized) -->
-				{#if showPanelDetails}
-					{#each polygon.solarPanels as panel}
-						<Polygon
-							latLngs={panel.coordinates}
-							options={{
-								color: '#1d4ed8',
-								weight: 1,
-								opacity: 0.6,
-								fillColor: '#3b82f6',
-								fillOpacity: 0.4
-							}}
-						/>
-					{/each}
-				{:else if polygon.solarPanels.length > 0}
-					<!-- Show sample panels for performance -->
-					{#each createPanelGroups(polygon.solarPanels) as panelCoords}
-						<Polygon
-							latLngs={panelCoords}
-							options={{
-								color: '#1d4ed8',
-								weight: 1,
-								opacity: 0.6,
-								fillColor: '#3b82f6',
-								fillOpacity: 0.4
-							}}
-						/>
-					{/each}
-				{/if}
+				<!-- Solar Panels -->
+				{#each polygon.solarPanels as panel}
+					<Polygon
+						latLngs={panel.coordinates}
+						options={{
+							color: '#1d4ed8',
+							weight: 1,
+							opacity: 0.6,
+							fillColor: '#3b82f6',
+							fillOpacity: 0.4
+						}}
+					/>
+				{/each}
 			{/each}
 
 			<!-- Drawing preview -->
@@ -623,22 +645,5 @@
 				{/each}
 			{/if}
 		</Map>
-
-		<!-- Enhanced Drawing Status -->
-		{#if isDrawing}
-			<div class="absolute top-4 right-4 z-[1000]">
-				<div class="alert alert-info max-w-xs shadow-lg">
-					<h3 class="font-bold">Drawing Site</h3>
-					<div class="text-xs">Points: {drawingPoints.length}</div>
-					{#if drawingPoints.length === 0}
-						<div class="mt-1 text-xs">🔴 Set origin point</div>
-					{:else if drawingPoints.length === 1}
-						<div class="mt-1 text-xs">🟢 Set panel direction</div>
-					{:else}
-						<div class="mt-1 text-xs">🔵 Add boundary points</div>
-					{/if}
-				</div>
-			</div>
-		{/if}
 	</div>
 </div>
