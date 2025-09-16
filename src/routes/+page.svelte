@@ -15,14 +15,17 @@
 	import MaterialSymbolsClearAll from '~icons/material-symbols/clear-all';
 	import MaterialSymbolsSolarPower from '~icons/material-symbols/solar-power';
 	import MaterialSymbolsWarning from '~icons/material-symbols/warning';
+	import MaterialSymbolsRoofing from '~icons/material-symbols/roofing';
 
 	interface DrawnPolygon {
 		id: string;
 		coordinates: [number, number][];
-		area: number;
+		projectedArea: number; // Area as drawn (satellite view projection)
+		actualArea: number; // Actual roof area accounting for angle
 		name: string;
 		solarPanels: SolarPanel[];
 		angle: number;
+		roofAngle: number; // Roof angle in degrees
 		panelArea: number;
 		coverage: number;
 	}
@@ -58,9 +61,11 @@
 
 	let mapType = $state('osm');
 	let showPerformanceDialog = $state(false);
+	let showRoofAngleDialog = $state(false);
+	let pendingRoofAngle = $state(30); // Default roof angle
 	let pendingPolygonData: {
 		coordinates: [number, number][];
-		area: number;
+		projectedArea: number;
 		angle: number;
 		estimatedPanelCount: number;
 	} | null = $state(null);
@@ -195,6 +200,12 @@
 		return panelCorners.every((corner) => pointInPolygon(corner, polygon));
 	}
 
+	// Calculate actual roof area from projected area and roof angle
+	function calculateActualRoofArea(projectedArea: number, roofAngleDegrees: number): number {
+		const roofAngleRadians = (roofAngleDegrees * Math.PI) / 180;
+		return projectedArea / Math.cos(roofAngleRadians);
+	}
+
 	// Estimate panel count without generating actual panels
 	function estimatePanelCount(polygon: [number, number][]): number {
 		if (polygon.length < 3) return 0;
@@ -279,40 +290,78 @@
 
 	function finishPolygon() {
 		if (isDrawing && drawingPoints.length >= 3) {
-			const area = calculatePolygonArea(drawingPoints);
+			const projectedArea = calculatePolygonArea(drawingPoints);
 			const angle =
 				drawingPoints.length >= 2 ? calculateAngle(drawingPoints[0], drawingPoints[1]) : 0;
 
 			// Estimate panel count before generating
 			const estimatedCount = estimatePanelCount(drawingPoints);
 
-			// Check if estimated count is too high and show warning dialog
-			if (estimatedCount > 500) {
-				pendingPolygonData = {
-					coordinates: [...drawingPoints],
-					area: area,
-					angle: angle,
-					estimatedPanelCount: estimatedCount
-				};
+			// Store pending data and show roof angle dialog
+			pendingPolygonData = {
+				coordinates: [...drawingPoints],
+				projectedArea: projectedArea,
+				angle: angle,
+				estimatedPanelCount: estimatedCount
+			};
+
+			// Reset to default angle
+			pendingRoofAngle = 30;
+			showRoofAngleDialog = true;
+		}
+	}
+
+	function confirmRoofAngle() {
+		if (pendingPolygonData) {
+			// Check if estimated count is too high and show performance warning
+			if (pendingPolygonData.estimatedPanelCount > 500) {
+				showRoofAngleDialog = false;
 				showPerformanceDialog = true;
 			} else {
-				createPolygonWithPanels(drawingPoints, area, angle);
+				createPolygonWithPanels(
+					pendingPolygonData.coordinates,
+					pendingPolygonData.projectedArea,
+					pendingPolygonData.angle,
+					pendingRoofAngle
+				);
+				showRoofAngleDialog = false;
 			}
 		}
 	}
 
-	function createPolygonWithPanels(coordinates: [number, number][], area: number, angle: number) {
+	function cancelRoofAngle() {
+		pendingPolygonData = null;
+		showRoofAngleDialog = false;
+
+		// Reset drawing state
+		isDrawing = false;
+		drawingPoints = [];
+		if (mapInstance) {
+			mapInstance.doubleClickZoom.enable();
+		}
+	}
+
+	function createPolygonWithPanels(
+		coordinates: [number, number][],
+		projectedArea: number,
+		angle: number,
+		roofAngle: number
+	) {
+		const actualArea = calculateActualRoofArea(projectedArea, roofAngle);
 		const solarPanels = generateSolarPanels(coordinates, angle);
 		const panelArea = solarPanels.reduce((sum, p) => sum + p.area, 0);
-		const coverage = area > 0 ? (panelArea / (area * 1000000)) * 100 : 0;
+		// Coverage is now based on actual roof area, not projected area
+		const coverage = actualArea > 0 ? (panelArea / (actualArea * 1000000)) * 100 : 0;
 
 		const newPolygon: DrawnPolygon = {
 			id: `polygon_${Date.now()}`,
 			coordinates: coordinates,
-			area: area,
+			projectedArea: projectedArea,
+			actualArea: actualArea,
 			name: `Site ${polygonCounter}`,
 			solarPanels: solarPanels,
 			angle: angle,
+			roofAngle: roofAngle,
 			panelArea: panelArea,
 			coverage: coverage
 		};
@@ -335,8 +384,9 @@
 		if (pendingPolygonData) {
 			createPolygonWithPanels(
 				pendingPolygonData.coordinates,
-				pendingPolygonData.area,
-				pendingPolygonData.angle
+				pendingPolygonData.projectedArea,
+				pendingPolygonData.angle,
+				pendingRoofAngle
 			);
 			pendingPolygonData = null;
 		}
@@ -346,6 +396,14 @@
 	function cancelAddPolygon() {
 		pendingPolygonData = null;
 		showPerformanceDialog = false;
+		showRoofAngleDialog = false;
+
+		// Reset drawing state
+		isDrawing = false;
+		drawingPoints = [];
+		if (mapInstance) {
+			mapInstance.doubleClickZoom.enable();
+		}
 	}
 
 	function cancelDrawing() {
@@ -381,7 +439,9 @@
 		polygons = polygons.map((polygon) => {
 			const solarPanels = generateSolarPanels(polygon.coordinates, polygon.angle);
 			const panelArea = solarPanels.reduce((sum, p) => sum + p.area, 0);
-			const coverage = polygon.area > 0 ? (panelArea / (polygon.area * 1000000)) * 100 : 0;
+			// Recalculate coverage based on actual roof area
+			const coverage =
+				polygon.actualArea > 0 ? (panelArea / (polygon.actualArea * 1000000)) * 100 : 0;
 
 			return {
 				...polygon,
@@ -640,6 +700,11 @@
 								</button>
 							</div>
 
+							<div class="mb-2 text-xs text-gray-400">
+								<div>Roof angle: {polygon.roofAngle}°</div>
+								<div>Actual area: {polygon.actualArea.toFixed(0)}m²</div>
+							</div>
+
 							<div class="grid grid-cols-3 gap-2 text-xs">
 								<div class="text-center">
 									<div class="font-medium text-blue-400">{polygon.solarPanels.length}</div>
@@ -695,6 +760,71 @@
 								Add boundaries
 							{/if}
 						</div>
+					</div>
+				</div>
+			</div>
+		{/if}
+
+		<!-- Roof Angle Dialog -->
+		{#if showRoofAngleDialog}
+			<div
+				class="bg-opacity-50 fixed inset-0 z-[2000] flex items-center justify-center bg-black/30"
+			>
+				<div class="mx-4 max-w-md rounded-lg border border-gray-600 bg-gray-800 p-6">
+					<div class="mb-4 flex items-center gap-3">
+						<MaterialSymbolsRoofing class="size-6 text-blue-500" />
+						<h3 class="text-lg font-bold text-white">Roof Angle</h3>
+					</div>
+					<p class="mb-4 text-sm text-gray-300">
+						Enter the roof angle to calculate the actual roof area. A steeper angle means more
+						actual roof area than what's visible from satellite view.
+					</p>
+					<div class="mb-6">
+						<label class="mb-2 block text-sm font-medium text-gray-300">
+							Roof Angle (degrees)
+
+							<input
+								type="range"
+								min="0"
+								max="60"
+								step="1"
+								bind:value={pendingRoofAngle}
+								class="range range-primary mb-2 w-full"
+							/>
+						</label>
+						<div class="flex justify-between text-xs text-gray-400">
+							<span>0° (Flat)</span>
+							<span class="font-medium text-white">{pendingRoofAngle}°</span>
+							<span>60° (Very steep)</span>
+						</div>
+						{#if pendingPolygonData}
+							<div class="mt-3 rounded bg-gray-700 p-3 text-xs">
+								<div class="grid grid-cols-2 gap-3">
+									<div>
+										<div class="text-gray-400">Projected area:</div>
+										<div class="font-medium text-white">
+											{pendingPolygonData.projectedArea.toFixed(0)}m²
+										</div>
+									</div>
+									<div>
+										<div class="text-gray-400">Actual area:</div>
+										<div class="font-medium text-blue-400">
+											{calculateActualRoofArea(
+												pendingPolygonData.projectedArea,
+												pendingRoofAngle
+											).toFixed(0)}m²
+										</div>
+									</div>
+								</div>
+								<div class="mt-2 text-center text-gray-400">
+									Area multiplier: {(1 / Math.cos((pendingRoofAngle * Math.PI) / 180)).toFixed(2)}x
+								</div>
+							</div>
+						{/if}
+					</div>
+					<div class="flex justify-end gap-3">
+						<button class="btn btn-ghost text-gray-300" onclick={cancelRoofAngle}> Cancel </button>
+						<button class="btn btn-primary" onclick={confirmRoofAngle}> Continue </button>
 					</div>
 				</div>
 			</div>
@@ -759,7 +889,13 @@
 							<h3 class="mb-2 font-bold">Site {index + 1}</h3>
 							<div class="space-y-1 text-sm">
 								<div>Panels: <strong>{polygon.solarPanels.length}</strong></div>
+								<div>Power: <strong>{polygon.estimatedPower.toFixed(1)} kW</strong></div>
 								<div>Coverage: <strong>{polygon.coverage.toFixed(1)}%</strong></div>
+								<div>Roof Angle: <strong>{polygon.roofAngle}°</strong></div>
+								<div>
+									Efficiency: <strong>{(polygon.efficiencyFactor * 100).toFixed(0)}%</strong>
+								</div>
+								<div>Annual Energy: <strong>{polygon.annualEnergy.toFixed(0)} kWh</strong></div>
 								<div>
 									Cost: <strong
 										>${(polygon.solarPanels.length * costPerPanel).toLocaleString()}</strong
@@ -778,8 +914,13 @@
 							color: '#1d4ed8',
 							weight: 1,
 							opacity: 0.7,
-							fillColor: '#3b82f6',
-							fillOpacity: 0.5
+							fillColor:
+								polygon.efficiencyFactor > 0.9
+									? '#22c55e'
+									: polygon.efficiencyFactor > 0.8
+										? '#eab308'
+										: '#ef4444',
+							fillOpacity: 0.6
 						}}
 					/>
 				{/each}
