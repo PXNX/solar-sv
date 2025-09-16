@@ -3,18 +3,18 @@
 	import { onMount } from 'svelte';
 	import L from 'leaflet';
 
-	// Professional icons
-	const IconSearch = '🔍';
-	const IconSun = '☀️';
-	const IconMap = '🗺️';
-	const IconSatellite = '🛰️';
-	const IconDraw = '✏️';
-	const IconCheck = '✅';
-	const IconCancel = '❌';
-	const IconTrash = '🗑️';
-	const IconClear = '🧹';
-	const IconPanel = '🔷';
-	const IconWarning = '⚠️';
+	// Import unplugin icons
+	import MaterialSymbolsSearch from '~icons/material-symbols/search';
+	import MaterialSymbolsWbSunny from '~icons/material-symbols/wb-sunny';
+	import MaterialSymbolsMap from '~icons/material-symbols/map';
+	import MaterialSymbolsSatelliteAlt from '~icons/material-symbols/satellite-alt';
+	import MaterialSymbolsEdit from '~icons/material-symbols/edit';
+	import MaterialSymbolsCheck from '~icons/material-symbols/check';
+	import MaterialSymbolsCancel from '~icons/material-symbols/cancel';
+	import MaterialSymbolsDelete from '~icons/material-symbols/delete';
+	import MaterialSymbolsClearAll from '~icons/material-symbols/clear-all';
+	import MaterialSymbolsSolarPower from '~icons/material-symbols/solar-power';
+	import MaterialSymbolsWarning from '~icons/material-symbols/warning';
 
 	interface DrawnPolygon {
 		id: string;
@@ -58,7 +58,12 @@
 
 	let mapType = $state('osm');
 	let showPerformanceDialog = $state(false);
-	let pendingPolygon: DrawnPolygon | null = $state(null);
+	let pendingPolygonData: {
+		coordinates: [number, number][];
+		area: number;
+		angle: number;
+		estimatedPanelCount: number;
+	} | null = $state(null);
 
 	let searchTimeout: number;
 
@@ -190,6 +195,33 @@
 		return panelCorners.every((corner) => pointInPolygon(corner, polygon));
 	}
 
+	// Estimate panel count without generating actual panels
+	function estimatePanelCount(polygon: [number, number][]): number {
+		if (polygon.length < 3) return 0;
+
+		const lats = polygon.map((p) => p[0]);
+		const lngs = polygon.map((p) => p[1]);
+		const minLat = Math.min(...lats);
+		const maxLat = Math.max(...lats);
+		const minLng = Math.min(...lngs);
+		const maxLng = Math.max(...lngs);
+
+		const centerLat = (minLat + maxLat) / 2;
+		const panelWidthDeg = metersToLatLng(panelWidth, centerLat);
+		const panelHeightDeg = metersToLatLng(panelHeight, centerLat);
+		const spacingWidthDeg = metersToLatLng(panelSpacing, centerLat);
+		const spacingHeightDeg = metersToLatLng(panelSpacing, centerLat);
+
+		const stepWidth = panelWidthDeg + spacingWidthDeg;
+		const stepHeight = panelHeightDeg + spacingHeightDeg;
+
+		const latSteps = Math.floor((maxLat - minLat) / stepHeight);
+		const lngSteps = Math.floor((maxLng - minLng) / stepWidth);
+
+		// Rough estimate - actual count will be lower due to polygon fitting
+		return Math.floor(latSteps * lngSteps * 0.7); // 0.7 is approximation factor
+	}
+
 	function generateSolarPanels(polygon: [number, number][], angle: number): SolarPanel[] {
 		if (polygon.length < 3) return [];
 
@@ -250,29 +282,42 @@
 			const area = calculatePolygonArea(drawingPoints);
 			const angle =
 				drawingPoints.length >= 2 ? calculateAngle(drawingPoints[0], drawingPoints[1]) : 0;
-			const solarPanels = generateSolarPanels(drawingPoints, angle);
-			const panelArea = solarPanels.reduce((sum, p) => sum + p.area, 0);
-			const coverage = area > 0 ? (panelArea / (area * 1000000)) * 100 : 0;
 
-			const newPolygon: DrawnPolygon = {
-				id: `polygon_${Date.now()}`,
-				coordinates: [...drawingPoints],
-				area: area,
-				name: `Site ${polygonCounter}`,
-				solarPanels: solarPanels,
-				angle: angle,
-				panelArea: panelArea,
-				coverage: coverage
-			};
+			// Estimate panel count before generating
+			const estimatedCount = estimatePanelCount(drawingPoints);
 
-			// Check if too many panels and show warning dialog
-			if (solarPanels.length > 500) {
-				pendingPolygon = newPolygon;
+			// Check if estimated count is too high and show warning dialog
+			if (estimatedCount > 500) {
+				pendingPolygonData = {
+					coordinates: [...drawingPoints],
+					area: area,
+					angle: angle,
+					estimatedPanelCount: estimatedCount
+				};
 				showPerformanceDialog = true;
 			} else {
-				addPolygon(newPolygon);
+				createPolygonWithPanels(drawingPoints, area, angle);
 			}
 		}
+	}
+
+	function createPolygonWithPanels(coordinates: [number, number][], area: number, angle: number) {
+		const solarPanels = generateSolarPanels(coordinates, angle);
+		const panelArea = solarPanels.reduce((sum, p) => sum + p.area, 0);
+		const coverage = area > 0 ? (panelArea / (area * 1000000)) * 100 : 0;
+
+		const newPolygon: DrawnPolygon = {
+			id: `polygon_${Date.now()}`,
+			coordinates: coordinates,
+			area: area,
+			name: `Site ${polygonCounter}`,
+			solarPanels: solarPanels,
+			angle: angle,
+			panelArea: panelArea,
+			coverage: coverage
+		};
+
+		addPolygon(newPolygon);
 	}
 
 	function addPolygon(polygon: DrawnPolygon) {
@@ -287,15 +332,19 @@
 	}
 
 	function confirmAddPolygon() {
-		if (pendingPolygon) {
-			addPolygon(pendingPolygon);
-			pendingPolygon = null;
+		if (pendingPolygonData) {
+			createPolygonWithPanels(
+				pendingPolygonData.coordinates,
+				pendingPolygonData.area,
+				pendingPolygonData.angle
+			);
+			pendingPolygonData = null;
 		}
 		showPerformanceDialog = false;
 	}
 
 	function cancelAddPolygon() {
-		pendingPolygon = null;
+		pendingPolygonData = null;
 		showPerformanceDialog = false;
 	}
 
@@ -404,16 +453,16 @@
 	>
 		<!-- Header -->
 		<div class="mb-4 flex items-center gap-2">
-			<span class="text-xl">{IconSun}</span>
+			<MaterialSymbolsWbSunny class="size-5" />
 			<h1 class="text-lg font-bold text-white">Solar Planner</h1>
 		</div>
 
 		<!-- Location Search -->
 		<div class="relative mb-3">
 			<div class="relative">
-				<span class="absolute top-1/2 left-3 -translate-y-1/2 transform text-gray-400"
-					>{IconSearch}</span
-				>
+				<MaterialSymbolsSearch
+					class="absolute top-1/2 left-3 size-4 -translate-y-1/2 transform text-gray-400"
+				/>
 				<input
 					type="text"
 					placeholder="Search location..."
@@ -453,7 +502,7 @@
 				class:btn-outline={mapType !== 'osm'}
 				onclick={() => (mapType = 'osm')}
 			>
-				<span class="text-xs">{IconMap}</span>
+				<MaterialSymbolsMap class="size-4" />
 				Street
 			</button>
 			<button
@@ -462,7 +511,7 @@
 				class:btn-outline={mapType !== 'satellite'}
 				onclick={() => (mapType = 'satellite')}
 			>
-				<span class="text-xs">{IconSatellite}</span>
+				<MaterialSymbolsSatelliteAlt class="size-4" />
 				Satellite
 			</button>
 		</div>
@@ -472,7 +521,7 @@
 			<div class="flex gap-2">
 				{#if !isDrawing}
 					<button onclick={startDrawing} class="btn btn-primary btn-sm flex-1 gap-1">
-						<span class="text-xs">{IconDraw}</span>
+						<MaterialSymbolsEdit class="size-4" />
 						Draw Site
 					</button>
 				{:else}
@@ -481,11 +530,11 @@
 						disabled={drawingPoints.length < 3}
 						class="btn btn-success btn-sm flex-1"
 					>
-						<span class="text-xs">{IconCheck}</span>
+						<MaterialSymbolsCheck class="size-4" />
 						Finish ({drawingPoints.length})
 					</button>
 					<button onclick={cancelDrawing} class="btn btn-ghost btn-sm">
-						<span class="text-xs">{IconCancel}</span>
+						<MaterialSymbolsCancel class="size-4" />
 					</button>
 				{/if}
 			</div>
@@ -564,7 +613,9 @@
 		<!-- Sites List -->
 		{#if polygons.length === 0}
 			<div class="py-6 text-center text-gray-400">
-				<div class="mb-2 text-2xl">{IconSun}</div>
+				<div class="mb-2">
+					<MaterialSymbolsWbSunny class="mx-auto size-8" />
+				</div>
 				<p class="text-sm">Draw sites to start</p>
 			</div>
 		{:else}
@@ -572,7 +623,7 @@
 				<div class="mb-2 flex items-center justify-between">
 					<span class="text-sm font-medium text-gray-300">Sites ({polygons.length})</span>
 					<button onclick={clearAll} class="btn btn-error btn-xs">
-						<span class="text-xs">{IconClear}</span>
+						<MaterialSymbolsClearAll class="size-4" />
 					</button>
 				</div>
 
@@ -585,7 +636,7 @@
 									onclick={() => deletePolygon(polygon.id)}
 									class="btn btn-ghost btn-xs h-5 min-h-0 p-0 text-red-400"
 								>
-									{IconTrash}
+									<MaterialSymbolsDelete class="size-4" />
 								</button>
 							</div>
 
@@ -632,7 +683,7 @@
 		{#if isDrawing}
 			<div class="absolute top-4 right-4 z-[1000]">
 				<div class="alert border-gray-600 bg-gray-800 text-white shadow-xl">
-					<span>{IconDraw}</span>
+					<MaterialSymbolsEdit class="size-5" />
 					<div>
 						<div class="font-medium">Drawing Mode</div>
 						<div class="text-xs opacity-80">
@@ -649,22 +700,6 @@
 			</div>
 		{/if}
 
-		<!-- Zoom Controls -->
-		<div class="absolute right-4 bottom-4 z-[1000] flex flex-col gap-1">
-			<button
-				class="btn btn-sm border-gray-600 bg-gray-800 text-white hover:bg-gray-700"
-				onclick={() => mapInstance?.zoomIn()}
-			>
-				+
-			</button>
-			<button
-				class="btn btn-sm border-gray-600 bg-gray-800 text-white hover:bg-gray-700"
-				onclick={() => mapInstance?.zoomOut()}
-			>
-				−
-			</button>
-		</div>
-
 		<!-- Performance Warning Dialog -->
 		{#if showPerformanceDialog}
 			<div
@@ -672,13 +707,13 @@
 			>
 				<div class="mx-4 max-w-md rounded-lg border border-gray-600 bg-gray-800 p-6">
 					<div class="mb-4 flex items-center gap-3">
-						<span class="text-2xl">{IconWarning}</span>
+						<MaterialSymbolsWarning class="size-6 text-yellow-500" />
 						<h3 class="text-lg font-bold text-white">Performance Warning</h3>
 					</div>
 					<p class="mb-6 text-gray-300">
-						This site will generate {pendingPolygon?.solarPanels.length} solar panels, which may cause
-						performance issues and slow down the interface. Consider reducing the site size or increasing
-						panel spacing.
+						This site will generate approximately {pendingPolygonData?.estimatedPanelCount} solar panels,
+						which may cause performance issues and slow down the interface. Consider reducing the site
+						size or increasing panel spacing.
 					</p>
 					<div class="flex justify-end gap-3">
 						<button class="btn btn-ghost text-gray-300" onclick={cancelAddPolygon}> Cancel </button>

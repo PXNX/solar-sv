@@ -29,6 +29,7 @@ declare module '$env/static/private' {
 	export const ALLUSERSPROFILE: string;
 	export const APPDATA: string;
 	export const BUN_INSPECT_CONNECT_TO: string;
+	export const BUN_WHICH_IGNORE_CWD: string;
 	export const ChocolateyInstall: string;
 	export const ChocolateyLastPathUpdate: string;
 	export const CHROME_CRASHPAD_PIPE_NAME: string;
@@ -41,6 +42,8 @@ declare module '$env/static/private' {
 	export const GIT_ASKPASS: string;
 	export const HOMEDRIVE: string;
 	export const HOMEPATH: string;
+	export const INIT_CWD: string;
+	export const JOBS: string;
 	export const LANG: string;
 	export const LIBTORCH: string;
 	export const LOCALAPPDATA: string;
@@ -130,6 +133,7 @@ declare module '$env/dynamic/private' {
 		ALLUSERSPROFILE: string;
 		APPDATA: string;
 		BUN_INSPECT_CONNECT_TO: string;
+		BUN_WHICH_IGNORE_CWD: string;
 		ChocolateyInstall: string;
 		ChocolateyLastPathUpdate: string;
 		CHROME_CRASHPAD_PIPE_NAME: string;
@@ -142,6 +146,8 @@ declare module '$env/dynamic/private' {
 		GIT_ASKPASS: string;
 		HOMEDRIVE: string;
 		HOMEPATH: string;
+		INIT_CWD: string;
+		JOBS: string;
 		LANG: string;
 		LIBTORCH: string;
 		LOCALAPPDATA: string;
