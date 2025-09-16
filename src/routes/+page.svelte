@@ -3,6 +3,19 @@
 	import { onMount } from 'svelte';
 	import L from 'leaflet';
 
+	// Professional icons
+	const IconSearch = '🔍';
+	const IconSun = '☀️';
+	const IconMap = '🗺️';
+	const IconSatellite = '🛰️';
+	const IconDraw = '✏️';
+	const IconCheck = '✅';
+	const IconCancel = '❌';
+	const IconTrash = '🗑️';
+	const IconClear = '🧹';
+	const IconPanel = '🔷';
+	const IconWarning = '⚠️';
+
 	interface DrawnPolygon {
 		id: string;
 		coordinates: [number, number][];
@@ -33,23 +46,46 @@
 	let drawingPoints = $state<[number, number][]>([]);
 	let polygonCounter = $state(1);
 
-	// Simplified settings
 	let panelWidth = $state(2.0);
 	let panelHeight = $state(1.0);
 	let panelSpacing = $state(0.5);
 	let costPerPanel = $state(500);
 
-	// Location search
 	let searchQuery = $state('');
 	let searchResults = $state<SearchResult[]>([]);
 	let isSearching = $state(false);
 	let showResults = $state(false);
 
-	// Map settings
-	let mapType = $state('osm'); // 'osm' or 'satellite'
+	let mapType = $state('osm');
+	let showPerformanceDialog = $state(false);
+	let pendingPolygon: DrawnPolygon | null = $state(null);
 
-	// Debounced search
 	let searchTimeout: number;
+
+	// Load settings from localStorage on mount
+	onMount(() => {
+		if (typeof localStorage !== 'undefined') {
+			const savedWidth = localStorage.getItem('panelWidth');
+			const savedHeight = localStorage.getItem('panelHeight');
+			const savedSpacing = localStorage.getItem('panelSpacing');
+			const savedCost = localStorage.getItem('costPerPanel');
+
+			if (savedWidth) panelWidth = parseFloat(savedWidth);
+			if (savedHeight) panelHeight = parseFloat(savedHeight);
+			if (savedSpacing) panelSpacing = parseFloat(savedSpacing);
+			if (savedCost) costPerPanel = parseFloat(savedCost);
+		}
+	});
+
+	// Save to localStorage when values change
+	function saveToLocalStorage() {
+		if (typeof localStorage !== 'undefined') {
+			localStorage.setItem('panelWidth', panelWidth.toString());
+			localStorage.setItem('panelHeight', panelHeight.toString());
+			localStorage.setItem('panelSpacing', panelSpacing.toString());
+			localStorage.setItem('costPerPanel', costPerPanel.toString());
+		}
+	}
 
 	function handleMapClick(e: any) {
 		if (isDrawing) {
@@ -229,15 +265,38 @@
 				coverage: coverage
 			};
 
-			polygons = [...polygons, newPolygon];
-			polygonCounter++;
-
-			isDrawing = false;
-			drawingPoints = [];
-			if (mapInstance) {
-				mapInstance.doubleClickZoom.enable();
+			// Check if too many panels and show warning dialog
+			if (solarPanels.length > 500) {
+				pendingPolygon = newPolygon;
+				showPerformanceDialog = true;
+			} else {
+				addPolygon(newPolygon);
 			}
 		}
+	}
+
+	function addPolygon(polygon: DrawnPolygon) {
+		polygons = [...polygons, polygon];
+		polygonCounter++;
+
+		isDrawing = false;
+		drawingPoints = [];
+		if (mapInstance) {
+			mapInstance.doubleClickZoom.enable();
+		}
+	}
+
+	function confirmAddPolygon() {
+		if (pendingPolygon) {
+			addPolygon(pendingPolygon);
+			pendingPolygon = null;
+		}
+		showPerformanceDialog = false;
+	}
+
+	function cancelAddPolygon() {
+		pendingPolygon = null;
+		showPerformanceDialog = false;
 	}
 
 	function cancelDrawing() {
@@ -284,7 +343,6 @@
 		});
 	}
 
-	// Location search functions
 	async function searchLocation(query: string) {
 		if (!query.trim()) {
 			searchResults = [];
@@ -322,50 +380,62 @@
 		const lon = parseFloat(result.lon);
 
 		if (mapInstance) {
-			mapInstance.setView([lat, lon], 18); // Increased zoom level from 16 to 18
+			mapInstance.setView([lat, lon], 18);
 		}
 
 		searchQuery = result.display_name;
 		showResults = false;
 	}
 
-	// Computed values
 	const totalSolarPanels = $derived(polygons.reduce((sum, p) => sum + p.solarPanels.length, 0));
 	const totalCost = $derived(totalSolarPanels * costPerPanel);
 
-	// Get next point color
 	function getNextPointColor(): string {
-		if (drawingPoints.length === 0) return '#ef4444'; // red
-		if (drawingPoints.length === 1) return '#22c55e'; // green
-		return '#3b82f6'; // blue
+		if (drawingPoints.length === 0) return '#f87171';
+		if (drawingPoints.length === 1) return '#34d399';
+		return '#60a5fa';
 	}
 </script>
 
-<div class="bg-base-200 flex h-screen">
-	<!-- Simplified Sidebar -->
-	<div class="bg-base-100 flex w-90 flex-col space-y-3 p-2 shadow-lg">
-		<!-- Location Search -->
+<div class="flex h-screen w-full flex-row">
+	<!-- Professional Sidebar -->
+	<div
+		class="flex h-svh w-80 flex-col border-r border-gray-700 bg-gray-800 p-3 text-white shadow-2xl"
+	>
+		<!-- Header -->
+		<div class="mb-4 flex items-center gap-2">
+			<span class="text-xl">{IconSun}</span>
+			<h1 class="text-lg font-bold text-white">Solar Planner</h1>
+		</div>
 
-		<div class="relative">
-			<input
-				type="text"
-				placeholder="Search location..."
-				class="input input-bordered input-md w-full"
-				bind:value={searchQuery}
-				oninput={handleSearchInput}
-				onfocus={() => (showResults = searchResults.length > 0)}
-			/>
-			{#if isSearching}
-				<span class="loading loading-spinner loading-md absolute top-2 right-2"></span>
-			{/if}
+		<!-- Location Search -->
+		<div class="relative mb-3">
+			<div class="relative">
+				<span class="absolute top-1/2 left-3 -translate-y-1/2 transform text-gray-400"
+					>{IconSearch}</span
+				>
+				<input
+					type="text"
+					placeholder="Search location..."
+					class="input input-sm w-full border-gray-600 bg-gray-700 pl-9 text-white placeholder-gray-400 focus:border-blue-500"
+					bind:value={searchQuery}
+					oninput={handleSearchInput}
+					onfocus={() => (showResults = searchResults.length > 0)}
+				/>
+				{#if isSearching}
+					<span
+						class="loading loading-spinner loading-sm absolute top-1/2 right-3 -translate-y-1/2 transform"
+					></span>
+				{/if}
+			</div>
 
 			{#if showResults && searchResults.length > 0}
 				<div
-					class="bg-base-100 border-base-300 absolute top-full z-50 mt-1 max-h-40 w-full overflow-y-auto rounded-lg border shadow-xl"
+					class="absolute top-full z-50 mt-1 max-h-40 w-full overflow-y-auto rounded border border-gray-600 bg-gray-700 shadow-xl"
 				>
 					{#each searchResults as result}
 						<button
-							class="hover:bg-base-200 border-base-300 text-base-content w-full border-b px-3 py-2 text-left text-xs last:border-b-0"
+							class="w-full border-b border-gray-600 px-3 py-2 text-left text-xs text-gray-200 last:border-b-0 hover:bg-gray-600"
 							onclick={() => selectLocation(result)}
 						>
 							{result.display_name}
@@ -375,151 +445,181 @@
 			{/if}
 		</div>
 
-		<div class="form-control flex flex-row gap-2">
+		<!-- Map Toggle -->
+		<div class="mb-3 flex gap-1">
 			<button
-				class="btn flex-1"
+				class="btn btn-sm flex-1 gap-1"
 				class:btn-primary={mapType === 'osm'}
+				class:btn-outline={mapType !== 'osm'}
 				onclick={() => (mapType = 'osm')}
 			>
+				<span class="text-xs">{IconMap}</span>
 				Street
 			</button>
 			<button
-				class="btn flex-1"
+				class="btn btn-sm flex-1 gap-1"
 				class:btn-primary={mapType === 'satellite'}
+				class:btn-outline={mapType !== 'satellite'}
 				onclick={() => (mapType = 'satellite')}
 			>
+				<span class="text-xs">{IconSatellite}</span>
 				Satellite
 			</button>
 		</div>
 
-		<div class="flex flex-row gap-2">
-			{#if !isDrawing}
-				<button onclick={startDrawing} class="btn btn-primary flex-1"> Draw Site </button>
-			{:else}
-				<button
-					onclick={finishPolygon}
-					disabled={drawingPoints.length < 3}
-					class="btn btn-success flex-1"
-				>
-					Finish ({drawingPoints.length})
-				</button>
-				<button onclick={cancelDrawing} class="btn btn-ghost flex-1"> Cancel </button>
-			{/if}
-		</div>
-
-		<div class="grid grid-cols-2 gap-2">
-			<div class="form-control">
-				<label class="label-text-sm pb-1"
-					>Width (m)
-					<input
-						type="number"
-						class="input input-bordered input-sm"
-						min="0.1"
-						max="10"
-						step="0.1"
-						bind:value={panelWidth}
-						onchange={() => updateSolarPanels()}
-					/>
-				</label>
-			</div>
-			<div class="form-control">
-				<label class="label-text-sm pb-1"
-					>Height (m)
-					<input
-						type="number"
-						class="input input-bordered input-sm"
-						min="0.1"
-						max="10"
-						step="0.1"
-						bind:value={panelHeight}
-						onchange={() => updateSolarPanels()}
-					/>
-				</label>
+		<!-- Drawing Controls -->
+		<div class="mb-3 rounded bg-gray-700 p-1">
+			<div class="flex gap-2">
+				{#if !isDrawing}
+					<button onclick={startDrawing} class="btn btn-primary btn-sm flex-1 gap-1">
+						<span class="text-xs">{IconDraw}</span>
+						Draw Site
+					</button>
+				{:else}
+					<button
+						onclick={finishPolygon}
+						disabled={drawingPoints.length < 3}
+						class="btn btn-success btn-sm flex-1"
+					>
+						<span class="text-xs">{IconCheck}</span>
+						Finish ({drawingPoints.length})
+					</button>
+					<button onclick={cancelDrawing} class="btn btn-ghost btn-sm">
+						<span class="text-xs">{IconCancel}</span>
+					</button>
+				{/if}
 			</div>
 		</div>
 
-		<div class="grid grid-cols-2 gap-2">
-			<div class="form-control">
-				<label class="label-text-sm pb-1"
-					>Spacing (m)
-					<input
-						type="number"
-						class="input input-bordered input-sm"
-						min="0"
-						max="5"
-						step="0.1"
-						bind:value={panelSpacing}
-						onchange={() => updateSolarPanels()}
-					/>
-				</label>
-			</div>
-			<div class="form-control">
-				<label class="label-text-sm pb-1"
-					>Cost ($)
-					<input
-						type="number"
-						class="input input-bordered input-sm"
-						min="1"
-						max="10000"
-						bind:value={costPerPanel}
-					/>
-				</label>
+		<!-- Panel Settings -->
+		<div class="mb-3 rounded bg-gray-700 p-1">
+			<div class="grid grid-cols-2 gap-2 text-xs">
+				<div>
+					<label class="text-gray-400"
+						>Width (m)
+						<input
+							type="number"
+							class="input input-xs mt-1 w-full border-gray-500 bg-gray-600 text-white"
+							min="0.1"
+							max="10"
+							step="0.1"
+							bind:value={panelWidth}
+							onchange={() => {
+								updateSolarPanels();
+								saveToLocalStorage();
+							}}
+						/>
+					</label>
+				</div>
+				<div>
+					<label class="text-gray-400"
+						>Height (m)
+						<input
+							type="number"
+							class="input input-xs mt-1 w-full border-gray-500 bg-gray-600 text-white"
+							min="0.1"
+							max="10"
+							step="0.1"
+							bind:value={panelHeight}
+							onchange={() => {
+								updateSolarPanels();
+								saveToLocalStorage();
+							}}
+						/>
+					</label>
+				</div>
+				<div>
+					<label class="text-gray-400"
+						>Spacing (m)
+						<input
+							type="number"
+							class="input input-xs mt-1 w-full border-gray-500 bg-gray-600 text-white"
+							min="0"
+							max="5"
+							step="0.1"
+							bind:value={panelSpacing}
+							onchange={() => {
+								updateSolarPanels();
+								saveToLocalStorage();
+							}}
+						/>
+					</label>
+				</div>
+				<div>
+					<label class="text-gray-400"
+						>Cost (€)
+						<input
+							type="number"
+							class="input input-xs mt-1 w-full border-gray-500 bg-gray-600 text-white"
+							min="1"
+							max="10000"
+							bind:value={costPerPanel}
+							onchange={() => saveToLocalStorage()}
+						/>
+					</label>
+				</div>
 			</div>
 		</div>
 
+		<!-- Sites List -->
 		{#if polygons.length === 0}
-			<div class="text-base-content/60 py-8 text-center">
-				<div class="mb-2 text-3xl">🌞</div>
-				<p class="text-sm">Draw sites to get started</p>
+			<div class="py-6 text-center text-gray-400">
+				<div class="mb-2 text-2xl">{IconSun}</div>
+				<p class="text-sm">Draw sites to start</p>
 			</div>
 		{:else}
-			<div class="flex-1 overflow-y-auto">
-				<div class="mb-3 flex items-center justify-between">
-					<h3 class="font-medium">Sites ({polygons.length})</h3>
-					{#if polygons.length > 0}
-						<button onclick={clearAll} class="btn btn-error btn-xs">Clear</button>
-					{/if}
+			<div class="flex flex-1 flex-col overflow-hidden">
+				<div class="mb-2 flex items-center justify-between">
+					<span class="text-sm font-medium text-gray-300">Sites ({polygons.length})</span>
+					<button onclick={clearAll} class="btn btn-error btn-xs">
+						<span class="text-xs">{IconClear}</span>
+					</button>
 				</div>
 
-				<div class="space-y-2">
-					{#each polygons as polygon}
-						<div class="card bg-base-200 card-compact">
-							<div class="card-body">
-								<div class="grid grid-cols-4 gap-2 text-sm">
-									<div>
-										<div class="text-base-content/60">Panels</div>
-										<div class="font-semibold">{polygon.solarPanels.length}</div>
-									</div>
-									<div>
-										<div class="text-base-content/60">Coverage</div>
-										<div class="font-semibold">{polygon.coverage.toFixed(1)}%</div>
-									</div>
-									<div>
-										<div class="text-base-content/60">Cost</div>
-										<div class="font-semibold">
-											${(polygon.solarPanels.length * costPerPanel).toLocaleString()}
-										</div>
-									</div>
+				<div class="flex-1 space-y-2 overflow-y-auto">
+					{#each polygons as polygon, index}
+						<div class="rounded bg-gray-700 p-2">
+							<div class="mb-2 flex items-center justify-between">
+								<span class="text-sm font-medium text-white">Site {index + 1}</span>
+								<button
+									onclick={() => deletePolygon(polygon.id)}
+									class="btn btn-ghost btn-xs h-5 min-h-0 p-0 text-red-400"
+								>
+									{IconTrash}
+								</button>
+							</div>
 
-									<button
-										onclick={() => deletePolygon(polygon.id)}
-										class="btn btn-ghost btn-xs text-error"
-									>
-										×
-									</button>
+							<div class="grid grid-cols-3 gap-2 text-xs">
+								<div class="text-center">
+									<div class="font-medium text-blue-400">{polygon.solarPanels.length}</div>
+									<div class="text-gray-400">Panels</div>
+								</div>
+								<div class="text-center">
+									<div class="font-medium text-green-400">{polygon.coverage.toFixed(1)}%</div>
+									<div class="text-gray-400">Cover</div>
+								</div>
+								<div class="text-center">
+									<div class="font-medium text-yellow-400">
+										${((polygon.solarPanels.length * costPerPanel) / 1000).toFixed(0)}k
+									</div>
+									<div class="text-gray-400">Cost</div>
 								</div>
 							</div>
 						</div>
 					{/each}
 				</div>
 
-				<!-- Summary Footer -->
-				<div class="bg-primary text-primary-content p-4">
-					<div class="text-center">
-						<div class="text-2xl font-bold">{totalSolarPanels.toLocaleString()}</div>
-						<div class="text-sm opacity-80">panels</div>
-						<div class="mt-1 text-lg font-semibold">${totalCost.toLocaleString()}</div>
-						<div class="text-xs opacity-80">total cost</div>
+				<!-- Summary -->
+				<div class="mt-3 rounded bg-blue-600 p-3 text-white">
+					<div class="flex items-center justify-between">
+						<div>
+							<div class="text-lg font-bold">{totalSolarPanels.toLocaleString()}</div>
+							<div class="text-xs opacity-80">Total Panels</div>
+						</div>
+						<div class="text-right">
+							<div class="text-lg font-bold">${(totalCost / 1000).toFixed(0)}k</div>
+							<div class="text-xs opacity-80">Total Cost</div>
+						</div>
 					</div>
 				</div>
 			</div>
@@ -527,26 +627,62 @@
 	</div>
 
 	<!-- Map Container -->
-	<div class="relative flex-1">
+	<div class="relative h-svh flex-1">
 		<!-- Drawing Status -->
 		{#if isDrawing}
 			<div class="absolute top-4 right-4 z-[1000]">
-				<div class="alert alert-primary max-w-sm shadow-lg">
+				<div class="alert border-gray-600 bg-gray-800 text-white shadow-xl">
+					<span>{IconDraw}</span>
 					<div>
-						<div class="font-semibold">Drawing Mode</div>
-						<div class="flex items-center gap-1 text-sm">
-							<div
-								class="size-3 rounded-full"
-								style="background-color: {getNextPointColor()}"
-							></div>
+						<div class="font-medium">Drawing Mode</div>
+						<div class="text-xs opacity-80">
 							{#if drawingPoints.length === 0}
-								Set origin point
+								Click origin point
 							{:else if drawingPoints.length === 1}
-								Set panel direction
+								Set direction
 							{:else}
-								Add boundary points
+								Add boundaries
 							{/if}
 						</div>
+					</div>
+				</div>
+			</div>
+		{/if}
+
+		<!-- Zoom Controls -->
+		<div class="absolute right-4 bottom-4 z-[1000] flex flex-col gap-1">
+			<button
+				class="btn btn-sm border-gray-600 bg-gray-800 text-white hover:bg-gray-700"
+				onclick={() => mapInstance?.zoomIn()}
+			>
+				+
+			</button>
+			<button
+				class="btn btn-sm border-gray-600 bg-gray-800 text-white hover:bg-gray-700"
+				onclick={() => mapInstance?.zoomOut()}
+			>
+				−
+			</button>
+		</div>
+
+		<!-- Performance Warning Dialog -->
+		{#if showPerformanceDialog}
+			<div
+				class="bg-opacity-50 fixed inset-0 z-[2000] flex items-center justify-center bg-black/30"
+			>
+				<div class="mx-4 max-w-md rounded-lg border border-gray-600 bg-gray-800 p-6">
+					<div class="mb-4 flex items-center gap-3">
+						<span class="text-2xl">{IconWarning}</span>
+						<h3 class="text-lg font-bold text-white">Performance Warning</h3>
+					</div>
+					<p class="mb-6 text-gray-300">
+						This site will generate {pendingPolygon?.solarPanels.length} solar panels, which may cause
+						performance issues and slow down the interface. Consider reducing the site size or increasing
+						panel spacing.
+					</p>
+					<div class="flex justify-end gap-3">
+						<button class="btn btn-ghost text-gray-300" onclick={cancelAddPolygon}> Cancel </button>
+						<button class="btn btn-warning" onclick={confirmAddPolygon}> Add Anyway </button>
 					</div>
 				</div>
 			</div>
@@ -559,7 +695,7 @@
 				minZoom: 1,
 				maxZoom: 20
 			}}
-			style="width:100%;height:100%;"
+			class={'h-full w-full flex-1 flex-col overflow-hidden'}
 			onclick={handleMapClick}
 			bind:instance={mapInstance}
 		>
@@ -573,19 +709,19 @@
 			{/if}
 
 			<!-- Polygons -->
-			{#each polygons as polygon}
+			{#each polygons as polygon, index}
 				<Polygon
 					latLngs={polygon.coordinates}
 					options={{
-						color: '#059669',
+						color: '#3b82f6',
 						weight: 2,
 						opacity: 0.8,
 						fillOpacity: 0.1
 					}}
 				>
 					<Popup>
-						<div class="p-2">
-							<h3 class="mb-2 font-semibold">{polygon.name}</h3>
+						<div class="rounded bg-gray-800 p-3 text-white">
+							<h3 class="mb-2 font-bold">Site {index + 1}</h3>
 							<div class="space-y-1 text-sm">
 								<div>Panels: <strong>{polygon.solarPanels.length}</strong></div>
 								<div>Coverage: <strong>{polygon.coverage.toFixed(1)}%</strong></div>
@@ -606,9 +742,9 @@
 						options={{
 							color: '#1d4ed8',
 							weight: 1,
-							opacity: 0.6,
+							opacity: 0.7,
 							fillColor: '#3b82f6',
-							fillOpacity: 0.4
+							fillOpacity: 0.5
 						}}
 					/>
 				{/each}
@@ -619,9 +755,9 @@
 				<Polygon
 					latLngs={drawingPoints}
 					options={{
-						color: '#059669',
+						color: '#10b981',
 						weight: 2,
-						opacity: 0.6,
+						opacity: 0.7,
 						fillOpacity: 0.2,
 						dashArray: '5, 10'
 					}}
@@ -634,8 +770,8 @@
 					<CircleMarker
 						latLng={point}
 						options={{
-							radius: 5,
-							fillColor: index === 0 ? '#ef4444' : index === 1 ? '#22c55e' : '#3b82f6',
+							radius: 6,
+							fillColor: index === 0 ? '#f87171' : index === 1 ? '#34d399' : '#60a5fa',
 							color: '#ffffff',
 							weight: 2,
 							opacity: 1,
