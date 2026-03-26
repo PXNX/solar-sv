@@ -520,20 +520,17 @@
 		<!-- Location Search -->
 		<div class="relative mb-3">
 			<div class="relative">
-				<MaterialSymbolsSearch
-					class="absolute top-1/2 left-3 size-4 -translate-y-1/2 transform text-gray-400"
-				/>
 				<input
 					type="text"
 					placeholder="Search location..."
-					class="input input-sm w-full border-gray-600 bg-gray-700 pl-9 text-white placeholder-gray-400 focus:border-blue-500"
+					class="input input-md w-full border-gray-600 bg-gray-700 text-white placeholder-gray-400"
 					bind:value={searchQuery}
 					oninput={handleSearchInput}
 					onfocus={() => (showResults = searchResults.length > 0)}
 				/>
 				{#if isSearching}
 					<span
-						class="loading loading-spinner loading-sm absolute top-1/2 right-3 -translate-y-1/2 transform"
+						class="loading loading-spinner loading-md absolute top-1/2 right-3 -translate-y-1/2 transform"
 					></span>
 				{/if}
 			</div>
@@ -743,7 +740,7 @@
 	</div>
 
 	<!-- Map Container -->
-	<div class="relative h-svh flex-1">
+	<div class="relative h-screen w-screen flex-1">
 		<!-- Drawing Status -->
 		{#if isDrawing}
 			<div class="absolute top-4 right-4 z-[1000]">
@@ -841,9 +838,8 @@
 						<h3 class="text-lg font-bold text-white">Performance Warning</h3>
 					</div>
 					<p class="mb-6 text-gray-300">
-						This site will generate approximately {pendingPolygonData?.estimatedPanelCount} solar panels,
-						which may cause performance issues and slow down the interface. Consider reducing the site
-						size or increasing panel spacing.
+						This action will draw a lot of solar panels, which may cause performance issues and slow
+						down the interface.
 					</p>
 					<div class="flex justify-end gap-3">
 						<button class="btn btn-ghost text-gray-300" onclick={cancelAddPolygon}> Cancel </button>
@@ -868,7 +864,7 @@
 				<TileLayer url={'https://tile.openstreetmap.org/{z}/{x}/{y}.png'} />
 			{:else}
 				<TileLayer
-					url={'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'}
+					url={'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}@2x.png'}
 					attribution="Tiles &copy; Esri"
 				/>
 			{/if}
@@ -889,13 +885,10 @@
 							<h3 class="mb-2 font-bold">Site {index + 1}</h3>
 							<div class="space-y-1 text-sm">
 								<div>Panels: <strong>{polygon.solarPanels.length}</strong></div>
-								<div>Power: <strong>{polygon.estimatedPower.toFixed(1)} kW</strong></div>
+
 								<div>Coverage: <strong>{polygon.coverage.toFixed(1)}%</strong></div>
 								<div>Roof Angle: <strong>{polygon.roofAngle}°</strong></div>
-								<div>
-									Efficiency: <strong>{(polygon.efficiencyFactor * 100).toFixed(0)}%</strong>
-								</div>
-								<div>Annual Energy: <strong>{polygon.annualEnergy.toFixed(0)} kWh</strong></div>
+
 								<div>
 									Cost: <strong
 										>${(polygon.solarPanels.length * costPerPanel).toLocaleString()}</strong
@@ -915,11 +908,7 @@
 							weight: 1,
 							opacity: 0.7,
 							fillColor:
-								polygon.efficiencyFactor > 0.9
-									? '#22c55e'
-									: polygon.efficiencyFactor > 0.8
-										? '#eab308'
-										: '#ef4444',
+								polygon.coverage > 0.9 ? '#22c55e' : polygon.coverage > 0.8 ? '#eab308' : '#ef4444',
 							fillOpacity: 0.6
 						}}
 					/>

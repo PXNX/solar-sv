@@ -26,6 +26,8 @@ export {};
 
 
 declare module "$app/types" {
+	type MatcherParam<M> = M extends (param : string) => param is (infer U extends string) ? U : string;
+
 	export interface AppTypes {
 		RouteId(): "/" | "/api" | "/api/export" | "/privacy-policy";
 		RouteParams(): {
@@ -37,7 +39,7 @@ declare module "$app/types" {
 			"/api/export": Record<string, never>;
 			"/privacy-policy": Record<string, never>
 		};
-		Pathname(): "/" | "/api" | "/api/" | "/api/export" | "/api/export/" | "/privacy-policy" | "/privacy-policy/";
+		Pathname(): "/" | "/api/export" | "/privacy-policy";
 		ResolvedPathname(): `${"" | `/${string}`}${ReturnType<AppTypes['Pathname']>}`;
 		Asset(): "/favicon.png" | string & {};
 	}
