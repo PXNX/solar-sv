@@ -1,3 +1,8 @@
 /node_modules
 /build
-.svelte-kit/generated
+/.svelte-kit
+/.vercel
+/src/lib/paraglide
+/test-results
+/playwright-report
+/blob-report

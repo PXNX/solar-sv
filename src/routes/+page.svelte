@@ -1,950 +1,1057 @@
 <script lang="ts">
-	import { Map, TileLayer, Polygon, Popup, CircleMarker } from 'sveaflet';
-	import { onMount } from 'svelte';
+	import { resolve } from '$app/paths';
+	import {
+		Map,
+		TileLayer,
+		Polygon,
+		Polyline,
+		CircleMarker,
+		Marker,
+		DivIcon,
+		ControlScale,
+		ControlZoom
+	} from 'sveaflet';
 	import L from 'leaflet';
+	import { tick } from 'svelte';
 
-	// Import unplugin icons
-	import MaterialSymbolsSearch from '~icons/material-symbols/search';
-	import MaterialSymbolsWbSunny from '~icons/material-symbols/wb-sunny';
-	import MaterialSymbolsMap from '~icons/material-symbols/map';
-	import MaterialSymbolsSatelliteAlt from '~icons/material-symbols/satellite-alt';
-	import MaterialSymbolsEdit from '~icons/material-symbols/edit';
-	import MaterialSymbolsCheck from '~icons/material-symbols/check';
-	import MaterialSymbolsCancel from '~icons/material-symbols/cancel';
-	import MaterialSymbolsDelete from '~icons/material-symbols/delete';
-	import MaterialSymbolsClearAll from '~icons/material-symbols/clear-all';
-	import MaterialSymbolsSolarPower from '~icons/material-symbols/solar-power';
-	import MaterialSymbolsWarning from '~icons/material-symbols/warning';
-	import MaterialSymbolsRoofing from '~icons/material-symbols/roofing';
+	import FluentWeatherSunny24Filled from '~icons/fluent/weather-sunny-24-filled';
+	import FluentMap24Regular from '~icons/fluent/map-24-regular';
+	import FluentEarth24Regular from '~icons/fluent/earth-24-regular';
+	import FluentEdit24Regular from '~icons/fluent/edit-24-regular';
+	import FluentCheckmark24Regular from '~icons/fluent/checkmark-24-regular';
+	import FluentDismiss24Regular from '~icons/fluent/dismiss-24-regular';
+	import FluentArrowUndo24Regular from '~icons/fluent/arrow-undo-24-regular';
+	import FluentDeleteDismiss24Regular from '~icons/fluent/delete-dismiss-24-regular';
+	import FluentOptions24Regular from '~icons/fluent/options-24-regular';
+	import FluentChevronDown24Regular from '~icons/fluent/chevron-down-24-regular';
+	import FluentHome24Regular from '~icons/fluent/home-24-regular';
+	import FluentArrowMove24Regular from '~icons/fluent/arrow-move-24-regular';
+	import FluentArrowLeft24Regular from '~icons/fluent/arrow-left-24-regular';
+	import FluentArrowRight24Regular from '~icons/fluent/arrow-right-24-regular';
+	import FluentArrowUp24Regular from '~icons/fluent/arrow-up-24-regular';
+	import FluentArrowDown24Regular from '~icons/fluent/arrow-down-24-regular';
+	import FluentArrowReset24Regular from '~icons/fluent/arrow-reset-24-regular';
+	import FluentPersonAdd24Regular from '~icons/fluent/person-add-24-regular';
+	import FluentPerson24Regular from '~icons/fluent/person-24-regular';
+	import FluentHistory24Regular from '~icons/fluent/history-24-regular';
+	import FluentSettings24Regular from '~icons/fluent/settings-24-regular';
+	import FluentImage24Regular from '~icons/fluent/image-24-regular';
+	import FluentDocumentPdf24Regular from '~icons/fluent/document-pdf-24-regular';
+	import FluentLocation24Filled from '~icons/fluent/location-24-filled';
+	import FluentCheckmarkCircle24Regular from '~icons/fluent/checkmark-circle-24-regular';
 
-	interface DrawnPolygon {
-		id: string;
-		coordinates: [number, number][];
-		projectedArea: number; // Area as drawn (satellite view projection)
-		actualArea: number; // Actual roof area accounting for angle
-		name: string;
-		solarPanels: SolarPanel[];
-		angle: number;
-		roofAngle: number; // Roof angle in degrees
-		panelArea: number;
-		coverage: number;
-	}
+	import { Badge, Button, IconButton } from '$lib/components/ui';
+	import RoofCard from '$lib/components/RoofCard.svelte';
+	import AddressInput, { type ResolvedAddress } from '$lib/components/AddressInput.svelte';
+	import EconomicsPanel from '$lib/components/EconomicsPanel.svelte';
+	import { computeEconomics } from '$lib/solar/economics';
+	import { cachedYield, estimateYield, fetchYield, yieldKey } from '$lib/solar/yield';
+	import { roofColor } from '$lib/solar/colors';
+	import {
+		DEFAULT_SETTINGS,
+		layoutRoof,
+		type LatLng,
+		type PanelSettings,
+		type Roof
+	} from '$lib/solar/layout';
+	import { persistedBranding } from '$lib/branding';
+	import {
+		archive,
+		isEmptyProject,
+		newProject,
+		persistedHistory,
+		persistedProject
+	} from '$lib/projects';
+	import { createPersistentState } from '$lib/utils/storeutils';
+	import { canvasToBlob, downloadBlob, renderElement } from '$lib/utils/screenshot';
+	import { compassLabel, formatEuro, formatNumber } from '$lib/utils/format';
+	import { m } from '$lib/paraglide/messages';
 
-	interface SolarPanel {
-		id: string;
-		coordinates: [number, number][];
-		center: [number, number];
-		area: number;
-	}
+	const STUTTGART: LatLng = [48.7758, 9.1829];
+	const DEFAULT_PITCH = 35;
+	const TILE_OPTIONS = { maxNativeZoom: 19, maxZoom: 22, crossOrigin: 'anonymous' as const };
 
-	interface SearchResult {
-		display_name: string;
-		lat: string;
-		lon: string;
-	}
+	const [storedSettings, saveSettings] = createPersistentState<PanelSettings>(
+		'solar-settings',
+		DEFAULT_SETTINGS,
+		JSON.stringify,
+		(value) => ({ ...DEFAULT_SETTINGS, ...JSON.parse(value) })
+	);
+	const [storedProject, saveProject] = persistedProject();
+	const [storedView, saveView] = createPersistentState<{ center: LatLng; zoom: number } | null>(
+		'solar-view',
+		null
+	);
 
-	let polygons = $state<DrawnPolygon[]>([]);
-	let isDrawing = $state(false);
-	let mapInstance: L.Map | undefined = $state();
-	let drawingPoints = $state<[number, number][]>([]);
-	let polygonCounter = $state(1);
+	let settings = $state(storedSettings);
+	let project = $state(storedProject);
+	let selectedId = $state<string | null>(null);
 
-	let panelWidth = $state(2.0);
-	let panelHeight = $state(1.0);
-	let panelSpacing = $state(0.5);
-	let costPerPanel = $state(500);
+	$effect(() => saveSettings($state.snapshot(settings)));
+	$effect(() => saveProject($state.snapshot(project)));
 
-	let searchQuery = $state('');
-	let searchResults = $state<SearchResult[]>([]);
-	let isSearching = $state(false);
-	let showResults = $state(false);
+	const layouts = $derived(project.roofs.map((roof) => layoutRoof(roof, settings)));
+	const totalPanels = $derived(layouts.reduce((sum, l) => sum + l.panels.length, 0));
 
-	let mapType = $state('osm');
-	let showPerformanceDialog = $state(false);
-	let showRoofAngleDialog = $state(false);
-	let pendingRoofAngle = $state(30); // Default roof angle
-	let pendingPolygonData: {
-		coordinates: [number, number][];
-		projectedArea: number;
-		angle: number;
-		estimatedPanelCount: number;
-	} | null = $state(null);
+	// Specific yield (kWh/kWp) per roof: PVGIS when reachable, otherwise a rough estimate.
+	let fetchedYields = $state<Record<string, number>>({});
+	const yieldKeys = $derived(
+		project.roofs.map((roof, i) => yieldKey(layouts[i].center, roof.pitch, layouts[i].azimuth))
+	);
+	const roofYields = $derived(
+		yieldKeys.map((key, i) => {
+			const specific = fetchedYields[key] ?? cachedYield(key);
+			return specific !== undefined
+				? { specific, source: 'pvgis' as const }
+				: {
+						specific: estimateYield(project.roofs[i].pitch, layouts[i].azimuth),
+						source: 'estimate' as const
+					};
+		})
+	);
 
-	let searchTimeout: number;
-
-	// Load settings from localStorage on mount
-	onMount(() => {
-		if (typeof localStorage !== 'undefined') {
-			const savedWidth = localStorage.getItem('panelWidth');
-			const savedHeight = localStorage.getItem('panelHeight');
-			const savedSpacing = localStorage.getItem('panelSpacing');
-			const savedCost = localStorage.getItem('costPerPanel');
-
-			if (savedWidth) panelWidth = parseFloat(savedWidth);
-			if (savedHeight) panelHeight = parseFloat(savedHeight);
-			if (savedSpacing) panelSpacing = parseFloat(savedSpacing);
-			if (savedCost) costPerPanel = parseFloat(savedCost);
-		}
+	$effect(() => {
+		const missing = yieldKeys.filter(
+			(key) => !(key in fetchedYields) && cachedYield(key) === undefined
+		);
+		if (missing.length === 0) return;
+		// Debounced so dragging the pitch slider does not fire a request per degree.
+		const timer = setTimeout(() => {
+			for (const key of missing) {
+				fetchYield(key).then((value) => {
+					if (value !== null) fetchedYields[key] = value;
+				});
+			}
+		}, 500);
+		return () => clearTimeout(timer);
 	});
 
-	// Save to localStorage when values change
-	function saveToLocalStorage() {
-		if (typeof localStorage !== 'undefined') {
-			localStorage.setItem('panelWidth', panelWidth.toString());
-			localStorage.setItem('panelHeight', panelHeight.toString());
-			localStorage.setItem('panelSpacing', panelSpacing.toString());
-			localStorage.setItem('costPerPanel', costPerPanel.toString());
-		}
+	const totalKwp = $derived((totalPanels * settings.watts) / 1000);
+	const annualProduction = $derived(
+		layouts.reduce(
+			(sum, l, i) => sum + ((l.panels.length * settings.watts) / 1000) * roofYields[i].specific,
+			0
+		)
+	);
+	const economicsResult = $derived(
+		computeEconomics(annualProduction, totalKwp, totalPanels * settings.cost, project.economics)
+	);
+
+	const MAP_OPTIONS: L.MapOptions = {
+		center: storedView?.center ?? storedProject.customer.location ?? STUTTGART,
+		zoom: storedView?.zoom ?? (storedProject.customer.location ? 20 : 17),
+		minZoom: 3,
+		maxZoom: 22,
+		zoomControl: false,
+		// One canvas instead of thousands of SVG nodes keeps large arrays smooth.
+		preferCanvas: true
+	};
+
+	let map: L.Map | undefined = $state();
+	let mapElement: HTMLElement;
+	let imageryLayer: L.TileLayer | undefined = $state();
+	let streetLayer: L.TileLayer | undefined = $state();
+	let mapType = $state<'satellite' | 'osm'>('satellite');
+
+	let drawing = $state(false);
+	let points = $state<LatLng[]>([]);
+
+	let onboarding = $state(isEmptyProject(storedProject));
+	let toast = $state<string | null>(null);
+	let toastTimer: ReturnType<typeof setTimeout>;
+
+	let exporting = $state<'png' | 'pdf' | null>(null);
+	/** While capturing: plan-style labels, no selection, no customer pin. */
+	let exportMode = $state(false);
+
+	// Esri imagery and OSM are georeferenced independently and can disagree by a few metres,
+	// differently from place to place. Like iD/JOSM, we let the user shift the imagery onto the
+	// street map instead of guessing a correction.
+	const ALIGN_STEP = 0.25;
+	const [storedOffset, saveOffset] = createPersistentState('solar-imagery-offset', {
+		east: 0,
+		north: 0
+	});
+	let imageryOffset = $state(storedOffset);
+	let aligning = $state(false);
+	let imageryPane = $state<HTMLElement>();
+	let view = $state({ zoom: MAP_OPTIONS.zoom ?? 17, lat: STUTTGART[0] });
+
+	$effect(() => saveOffset($state.snapshot(imageryOffset)));
+
+	$effect(() => {
+		if (!map || imageryPane) return;
+		// Below the default tile pane, so the street overlay used for aligning sits on top.
+		const pane = map.createPane('imagery');
+		pane.style.zIndex = '150';
+		imageryPane = pane;
+	});
+
+	$effect(() => {
+		if (!imageryPane) return;
+		const metresPerPixel =
+			(2 * Math.PI * 6378137 * Math.cos((view.lat * Math.PI) / 180)) / (256 * 2 ** view.zoom);
+		const x = imageryOffset.east / metresPerPixel;
+		const y = -imageryOffset.north / metresPerPixel;
+		imageryPane.style.transform = `translate(${x}px, ${y}px)`;
+	});
+
+	// Arrow keys nudge the imagery while aligning instead of panning the map.
+	$effect(() => {
+		if (aligning) map?.keyboard.disable();
+		else map?.keyboard.enable();
+	});
+
+	function updateView(zoom = map?.getZoom()) {
+		if (!map || zoom === undefined) return;
+		const center = map.getCenter();
+		view = { zoom, lat: center.lat };
+		if (!exportMode) saveView({ center: [center.lat, center.lng], zoom: map.getZoom() });
 	}
 
-	function handleMapClick(e: any) {
-		if (isDrawing) {
-			const point: [number, number] = [e.latlng.lat, e.latlng.lng];
-			drawingPoints = [...drawingPoints, point];
-		}
-		showResults = false;
+	function nudgeImagery(east: number, north: number) {
+		imageryOffset.east = Math.round((imageryOffset.east + east) * 100) / 100;
+		imageryOffset.north = Math.round((imageryOffset.north + north) * 100) / 100;
+	}
+
+	function startAligning() {
+		stopDrawing();
+		mapType = 'satellite';
+		aligning = true;
+	}
+
+	function showToast(message: string) {
+		toast = message;
+		clearTimeout(toastTimer);
+		toastTimer = setTimeout(() => (toast = null), 3500);
+	}
+
+	function handleMapClick(e: L.LeafletMouseEvent) {
+		if (drawing) points.push([e.latlng.lat, e.latlng.lng]);
 	}
 
 	function startDrawing() {
-		isDrawing = true;
-		drawingPoints = [];
-		showResults = false;
-		if (mapInstance) {
-			mapInstance.doubleClickZoom.disable();
-		}
+		aligning = false;
+		onboarding = false;
+		drawing = true;
+		points = [];
+		selectedId = null;
+		map?.doubleClickZoom.disable();
 	}
 
-	function calculateAngle(p1: [number, number], p2: [number, number]): number {
-		const dx = p2[1] - p1[1];
-		const dy = p2[0] - p1[0];
-		return Math.atan2(dy, dx);
+	function stopDrawing() {
+		drawing = false;
+		points = [];
+		map?.doubleClickZoom.enable();
 	}
 
-	function metersToLatLng(meters: number, lat: number): number {
-		return meters / (111320 * Math.cos((lat * Math.PI) / 180));
-	}
-
-	function rotatePoint(
-		point: [number, number],
-		center: [number, number],
-		angle: number
-	): [number, number] {
-		const cos = Math.cos(angle);
-		const sin = Math.sin(angle);
-		const dx = point[1] - center[1];
-		const dy = point[0] - center[0];
-		return [center[0] + dx * sin + dy * cos, center[1] + dx * cos - dy * sin];
-	}
-
-	function createSolarPanel(
-		center: [number, number],
-		width: number,
-		height: number,
-		angle: number
-	): [number, number][] {
-		const widthDeg = metersToLatLng(width, center[0]);
-		const heightDeg = metersToLatLng(height, center[0]);
-
-		const halfWidth = widthDeg / 2;
-		const halfHeight = heightDeg / 2;
-
-		const corners: [number, number][] = [
-			[center[0] - halfHeight, center[1] - halfWidth],
-			[center[0] - halfHeight, center[1] + halfWidth],
-			[center[0] + halfHeight, center[1] + halfWidth],
-			[center[0] + halfHeight, center[1] - halfWidth]
-		];
-
-		return corners.map((corner) => rotatePoint(corner, center, angle));
-	}
-
-	function pointInPolygon(point: [number, number], polygon: [number, number][]): boolean {
-		const [x, y] = point;
-		let inside = false;
-
-		for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-			const [xi, yi] = polygon[i];
-			const [xj, yj] = polygon[j];
-
-			if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) {
-				inside = !inside;
-			}
-		}
-
-		return inside;
-	}
-
-	function rectanglesOverlap(rect1: [number, number][], rect2: [number, number][]): boolean {
-		const rect1MinLat = Math.min(...rect1.map((p) => p[0]));
-		const rect1MaxLat = Math.max(...rect1.map((p) => p[0]));
-		const rect1MinLng = Math.min(...rect1.map((p) => p[1]));
-		const rect1MaxLng = Math.max(...rect1.map((p) => p[1]));
-
-		const rect2MinLat = Math.min(...rect2.map((p) => p[0]));
-		const rect2MaxLat = Math.max(...rect2.map((p) => p[0]));
-		const rect2MinLng = Math.min(...rect2.map((p) => p[1]));
-		const rect2MaxLng = Math.max(...rect2.map((p) => p[1]));
-
-		return !(
-			rect1MaxLat < rect2MinLat ||
-			rect2MaxLat < rect1MinLat ||
-			rect1MaxLng < rect2MinLng ||
-			rect2MaxLng < rect1MinLng
-		);
-	}
-
-	function solarPanelFitsInPolygon(
-		panelCorners: [number, number][],
-		polygon: [number, number][]
-	): boolean {
-		return panelCorners.every((corner) => pointInPolygon(corner, polygon));
-	}
-
-	// Calculate actual roof area from projected area and roof angle
-	function calculateActualRoofArea(projectedArea: number, roofAngleDegrees: number): number {
-		const roofAngleRadians = (roofAngleDegrees * Math.PI) / 180;
-		return projectedArea / Math.cos(roofAngleRadians);
-	}
-
-	// Estimate panel count without generating actual panels
-	function estimatePanelCount(polygon: [number, number][]): number {
-		if (polygon.length < 3) return 0;
-
-		const lats = polygon.map((p) => p[0]);
-		const lngs = polygon.map((p) => p[1]);
-		const minLat = Math.min(...lats);
-		const maxLat = Math.max(...lats);
-		const minLng = Math.min(...lngs);
-		const maxLng = Math.max(...lngs);
-
-		const centerLat = (minLat + maxLat) / 2;
-		const panelWidthDeg = metersToLatLng(panelWidth, centerLat);
-		const panelHeightDeg = metersToLatLng(panelHeight, centerLat);
-		const spacingWidthDeg = metersToLatLng(panelSpacing, centerLat);
-		const spacingHeightDeg = metersToLatLng(panelSpacing, centerLat);
-
-		const stepWidth = panelWidthDeg + spacingWidthDeg;
-		const stepHeight = panelHeightDeg + spacingHeightDeg;
-
-		const latSteps = Math.floor((maxLat - minLat) / stepHeight);
-		const lngSteps = Math.floor((maxLng - minLng) / stepWidth);
-
-		// Rough estimate - actual count will be lower due to polygon fitting
-		return Math.floor(latSteps * lngSteps * 0.7); // 0.7 is approximation factor
-	}
-
-	function generateSolarPanels(polygon: [number, number][], angle: number): SolarPanel[] {
-		if (polygon.length < 3) return [];
-
-		const lats = polygon.map((p) => p[0]);
-		const lngs = polygon.map((p) => p[1]);
-		const minLat = Math.min(...lats);
-		const maxLat = Math.max(...lats);
-		const minLng = Math.min(...lngs);
-		const maxLng = Math.max(...lngs);
-
-		const centerLat = (minLat + maxLat) / 2;
-
-		const panelWidthDeg = metersToLatLng(panelWidth, centerLat);
-		const panelHeightDeg = metersToLatLng(panelHeight, centerLat);
-		const spacingWidthDeg = metersToLatLng(panelSpacing, centerLat);
-		const spacingHeightDeg = metersToLatLng(panelSpacing, centerLat);
-
-		const solarPanels: SolarPanel[] = [];
-		const placedPanels: [number, number][][] = [];
-		let id = 0;
-
-		const stepWidth = panelWidthDeg + spacingWidthDeg;
-		const stepHeight = panelHeightDeg + spacingHeightDeg;
-
-		for (let lat = minLat; lat <= maxLat; lat += stepHeight) {
-			for (let lng = minLng; lng <= maxLng; lng += stepWidth) {
-				const center: [number, number] = [lat + panelHeightDeg / 2, lng + panelWidthDeg / 2];
-				const panelCorners = createSolarPanel(center, panelWidth, panelHeight, angle);
-
-				if (solarPanelFitsInPolygon(panelCorners, polygon)) {
-					let overlaps = false;
-					for (const existingPanel of placedPanels) {
-						if (rectanglesOverlap(panelCorners, existingPanel)) {
-							overlaps = true;
-							break;
-						}
-					}
-
-					if (!overlaps) {
-						const panelArea = panelWidth * panelHeight;
-						solarPanels.push({
-							id: `panel_${id++}`,
-							coordinates: panelCorners,
-							center: center,
-							area: panelArea
-						});
-						placedPanels.push(panelCorners);
-					}
-				}
-			}
-		}
-
-		return solarPanels;
-	}
-
-	function finishPolygon() {
-		if (isDrawing && drawingPoints.length >= 3) {
-			const projectedArea = calculatePolygonArea(drawingPoints);
-			const angle =
-				drawingPoints.length >= 2 ? calculateAngle(drawingPoints[0], drawingPoints[1]) : 0;
-
-			// Estimate panel count before generating
-			const estimatedCount = estimatePanelCount(drawingPoints);
-
-			// Store pending data and show roof angle dialog
-			pendingPolygonData = {
-				coordinates: [...drawingPoints],
-				projectedArea: projectedArea,
-				angle: angle,
-				estimatedPanelCount: estimatedCount
-			};
-
-			// Reset to default angle
-			pendingRoofAngle = 30;
-			showRoofAngleDialog = true;
-		}
-	}
-
-	function confirmRoofAngle() {
-		if (pendingPolygonData) {
-			// Check if estimated count is too high and show performance warning
-			if (pendingPolygonData.estimatedPanelCount > 500) {
-				showRoofAngleDialog = false;
-				showPerformanceDialog = true;
-			} else {
-				createPolygonWithPanels(
-					pendingPolygonData.coordinates,
-					pendingPolygonData.projectedArea,
-					pendingPolygonData.angle,
-					pendingRoofAngle
-				);
-				showRoofAngleDialog = false;
-			}
-		}
-	}
-
-	function cancelRoofAngle() {
-		pendingPolygonData = null;
-		showRoofAngleDialog = false;
-
-		// Reset drawing state
-		isDrawing = false;
-		drawingPoints = [];
-		if (mapInstance) {
-			mapInstance.doubleClickZoom.enable();
-		}
-	}
-
-	function createPolygonWithPanels(
-		coordinates: [number, number][],
-		projectedArea: number,
-		angle: number,
-		roofAngle: number
-	) {
-		const actualArea = calculateActualRoofArea(projectedArea, roofAngle);
-		const solarPanels = generateSolarPanels(coordinates, angle);
-		const panelArea = solarPanels.reduce((sum, p) => sum + p.area, 0);
-		// Coverage is now based on actual roof area, not projected area
-		const coverage = actualArea > 0 ? (panelArea / (actualArea * 1000000)) * 100 : 0;
-
-		const newPolygon: DrawnPolygon = {
-			id: `polygon_${Date.now()}`,
-			coordinates: coordinates,
-			projectedArea: projectedArea,
-			actualArea: actualArea,
-			name: `Site ${polygonCounter}`,
-			solarPanels: solarPanels,
-			angle: angle,
-			roofAngle: roofAngle,
-			panelArea: panelArea,
-			coverage: coverage
+	function finishDrawing() {
+		if (points.length < 3) return;
+		const roof: Roof = {
+			id: crypto.randomUUID(),
+			name: m.default_roof_name({ n: project.roofs.length + 1 }),
+			outline: $state.snapshot(points),
+			pitch: DEFAULT_PITCH
 		};
-
-		addPolygon(newPolygon);
+		project.roofs.push(roof);
+		selectedId = roof.id;
+		stopDrawing();
 	}
 
-	function addPolygon(polygon: DrawnPolygon) {
-		polygons = [...polygons, polygon];
-		polygonCounter++;
-
-		isDrawing = false;
-		drawingPoints = [];
-		if (mapInstance) {
-			mapInstance.doubleClickZoom.enable();
-		}
-	}
-
-	function confirmAddPolygon() {
-		if (pendingPolygonData) {
-			createPolygonWithPanels(
-				pendingPolygonData.coordinates,
-				pendingPolygonData.projectedArea,
-				pendingPolygonData.angle,
-				pendingRoofAngle
-			);
-			pendingPolygonData = null;
-		}
-		showPerformanceDialog = false;
-	}
-
-	function cancelAddPolygon() {
-		pendingPolygonData = null;
-		showPerformanceDialog = false;
-		showRoofAngleDialog = false;
-
-		// Reset drawing state
-		isDrawing = false;
-		drawingPoints = [];
-		if (mapInstance) {
-			mapInstance.doubleClickZoom.enable();
-		}
-	}
-
-	function cancelDrawing() {
-		isDrawing = false;
-		drawingPoints = [];
-		if (mapInstance) {
-			mapInstance.doubleClickZoom.enable();
-		}
-	}
-
-	function calculatePolygonArea(coords: [number, number][]): number {
-		if (coords.length < 3) return 0;
-
-		let area = 0;
-		for (let i = 0; i < coords.length; i++) {
-			const j = (i + 1) % coords.length;
-			area += coords[i][0] * coords[j][1];
-			area -= coords[j][0] * coords[i][1];
-		}
-		return Math.abs(area / 2) * 111.32 * 111.32;
-	}
-
-	function deletePolygon(id: string) {
-		polygons = polygons.filter((p) => p.id !== id);
-	}
-
-	function clearAll() {
-		polygons = [];
-		polygonCounter = 1;
-	}
-
-	function updateSolarPanels() {
-		polygons = polygons.map((polygon) => {
-			const solarPanels = generateSolarPanels(polygon.coordinates, polygon.angle);
-			const panelArea = solarPanels.reduce((sum, p) => sum + p.area, 0);
-			// Recalculate coverage based on actual roof area
-			const coverage =
-				polygon.actualArea > 0 ? (panelArea / (polygon.actualArea * 1000000)) * 100 : 0;
-
-			return {
-				...polygon,
-				solarPanels,
-				panelArea,
-				coverage
+	function handleKeydown(e: KeyboardEvent) {
+		if (e.target instanceof HTMLInputElement || onboarding) return;
+		if (aligning) {
+			const nudges: Record<string, [number, number]> = {
+				ArrowLeft: [-ALIGN_STEP, 0],
+				ArrowRight: [ALIGN_STEP, 0],
+				ArrowUp: [0, ALIGN_STEP],
+				ArrowDown: [0, -ALIGN_STEP]
 			};
-		});
-	}
-
-	async function searchLocation(query: string) {
-		if (!query.trim()) {
-			searchResults = [];
+			if (e.key in nudges) {
+				e.preventDefault();
+				nudgeImagery(...nudges[e.key]);
+			} else if (e.key === 'Escape' || e.key === 'Enter') aligning = false;
 			return;
 		}
+		if (!drawing) return;
+		if (e.key === 'Enter') finishDrawing();
+		else if (e.key === 'Escape') stopDrawing();
+		else if (e.key === 'Backspace') points.pop();
+	}
 
-		isSearching = true;
-		try {
-			const response = await fetch(
-				`https://nominatim.openstreetmap.org/search?format=json&limit=5&q=${encodeURIComponent(query)}`
+	function handleFirstPointClick(e: L.LeafletMouseEvent) {
+		// Closing the ring must not also add a point via the map click handler.
+		L.DomEvent.stopPropagation(e);
+		finishDrawing();
+	}
+
+	function deleteRoof(id: string) {
+		project.roofs = project.roofs.filter((r) => r.id !== id);
+		if (selectedId === id) selectedId = null;
+	}
+
+	function selectRoof(id: string) {
+		if (drawing) return;
+		selectedId = id;
+	}
+
+	function locateCustomer({ address, location }: ResolvedAddress) {
+		project.customer.address = address;
+		project.customer.location = location;
+		map?.setView(location, 20);
+	}
+
+	function startNewCustomer() {
+		const [history, saveHistory] = persistedHistory();
+		const archived = !isEmptyProject(project);
+		saveHistory(archive(history, $state.snapshot(project), $state.snapshot(settings)));
+		stopDrawing();
+		aligning = false;
+		selectedId = null;
+		project = newProject($state.snapshot(project.economics));
+		onboarding = true;
+		if (archived) showToast(m.archived_toast());
+	}
+
+	function startPlanning() {
+		onboarding = false;
+		if (project.customer.location) map?.setView(project.customer.location, 20);
+	}
+
+	function slug(value: string): string {
+		return value
+			.toLowerCase()
+			.replace(/ä/g, 'ae')
+			.replace(/ö/g, 'oe')
+			.replace(/ü/g, 'ue')
+			.replace(/ß/g, 'ss')
+			.replace(/[^a-z0-9]+/g, '-')
+			.replace(/^-|-$/g, '');
+	}
+
+	function fileName(kind: string, extension: string): string {
+		const date = new Date().toISOString().slice(0, 10);
+		return [slug(project.customer.name), slug(kind), date].filter(Boolean).join('-') + extension;
+	}
+
+	async function waitForTiles() {
+		await new Promise((r) => setTimeout(r, 150));
+		const started = performance.now();
+		const loading = () =>
+			[imageryLayer, streetLayer].some(
+				(layer) => layer && map?.hasLayer(layer) && layer.isLoading()
 			);
-			const results = await response.json();
-			searchResults = results;
-			showResults = true;
-		} catch (error) {
-			console.error('Search error:', error);
-			searchResults = [];
+		while (loading() && performance.now() - started < 8000) {
+			await new Promise((r) => setTimeout(r, 100));
+		}
+	}
+
+	/** Frames all roofs, switches labels to plan style and renders the map to a canvas. */
+	async function captureMap(): Promise<HTMLCanvasElement> {
+		if (!map) throw new Error('Map not ready');
+		const previous = { center: map.getCenter(), zoom: map.getZoom(), selected: selectedId };
+		exportMode = true;
+		selectedId = null;
+		try {
+			const outline = project.roofs.flatMap((r) => r.outline);
+			if (outline.length > 0) {
+				map.fitBounds(L.latLngBounds(outline), { padding: [90, 90], maxZoom: 21, animate: false });
+			}
+			await tick();
+			await waitForTiles();
+			return await renderElement(mapElement);
 		} finally {
-			isSearching = false;
+			exportMode = false;
+			selectedId = previous.selected;
+			map.setView(previous.center, previous.zoom, { animate: false });
 		}
 	}
 
-	function handleSearchInput(event: Event) {
-		const target = event.target as HTMLInputElement;
-		searchQuery = target.value;
-
-		clearTimeout(searchTimeout);
-		searchTimeout = setTimeout(() => {
-			searchLocation(searchQuery);
-		}, 300);
-	}
-
-	function selectLocation(result: SearchResult) {
-		const lat = parseFloat(result.lat);
-		const lon = parseFloat(result.lon);
-
-		if (mapInstance) {
-			mapInstance.setView([lat, lon], 18);
+	async function runExport(kind: 'png' | 'pdf') {
+		exporting = kind;
+		try {
+			const canvas = await captureMap();
+			if (kind === 'png') {
+				downloadBlob(await canvasToBlob(canvas), fileName(m.export_png(), '.png'));
+				return;
+			}
+			const { createProposalPdf } = await import('$lib/report/pdf');
+			const [branding] = persistedBranding();
+			const blob = createProposalPdf({
+				branding,
+				customer: $state.snapshot(project.customer),
+				settings: $state.snapshot(settings),
+				roofs: $state.snapshot(project.roofs),
+				layouts,
+				yields: roofYields,
+				economics: $state.snapshot(project.economics),
+				result: economicsResult,
+				map: canvas
+			});
+			downloadBlob(blob, fileName(m.export_pdf(), '.pdf'));
+		} catch (error) {
+			console.error('Export failed:', error);
+			alert(m.export_failed());
+		} finally {
+			exporting = null;
 		}
-
-		searchQuery = result.display_name;
-		showResults = false;
 	}
 
-	const totalSolarPanels = $derived(polygons.reduce((sum, p) => sum + p.solarPanels.length, 0));
-	const totalCost = $derived(totalSolarPanels * costPerPanel);
-
-	function getNextPointColor(): string {
-		if (drawingPoints.length === 0) return '#f87171';
-		if (drawingPoints.length === 1) return '#34d399';
-		return '#60a5fa';
-	}
+	const numberFields = [
+		{ key: 'length', label: m.field_length, min: 0.3, max: 3, step: 0.01 },
+		{ key: 'width', label: m.field_width, min: 0.3, max: 3, step: 0.01 },
+		{ key: 'gap', label: m.field_gap, min: 0, max: 1, step: 0.01 },
+		{ key: 'margin', label: m.field_margin, min: 0, max: 2, step: 0.05 },
+		{ key: 'watts', label: m.field_power, min: 50, max: 1000, step: 5 },
+		{ key: 'cost', label: m.field_cost, min: 0, max: 10000, step: 10 }
+	] as const;
 </script>
 
-<div class="flex h-screen w-full flex-row">
-	<!-- Professional Sidebar -->
-	<div
-		class="flex h-svh w-80 flex-col border-r border-gray-700 bg-gray-800 p-3 text-white shadow-2xl"
-	>
-		<!-- Header -->
-		<div class="mb-4 flex items-center gap-2">
-			<MaterialSymbolsWbSunny class="size-5" />
-			<h1 class="text-lg font-bold text-white">Solar Planner</h1>
-		</div>
+<svelte:head>
+	<title>{project.customer.name ? `${project.customer.name} · ` : ''}{m.app_name()}</title>
+</svelte:head>
 
-		<!-- Location Search -->
-		<div class="relative mb-3">
-			<div class="relative">
-				<input
-					type="text"
-					placeholder="Search location..."
-					class="input input-md w-full border-gray-600 bg-gray-700 text-white placeholder-gray-400"
-					bind:value={searchQuery}
-					oninput={handleSearchInput}
-					onfocus={() => (showResults = searchResults.length > 0)}
+<svelte:window onkeydown={handleKeydown} />
+
+<div class="bg-neutral relative h-svh w-full overflow-hidden">
+	<div class="absolute inset-0" class:cursor-crosshair={drawing} bind:this={mapElement}>
+		<Map
+			options={MAP_OPTIONS}
+			onclick={handleMapClick}
+			onzoomanim={(e: L.ZoomAnimEvent) => updateView(e.zoom)}
+			onzoomend={() => updateView()}
+			onmoveend={() => updateView()}
+			bind:instance={map}
+		>
+			{#if mapType === 'satellite' && imageryPane}
+				<TileLayer
+					url={'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'}
+					options={{ ...TILE_OPTIONS, pane: 'imagery', attribution: 'Tiles &copy; Esri' }}
+					bind:instance={imageryLayer}
 				/>
-				{#if isSearching}
-					<span
-						class="loading loading-spinner loading-md absolute top-1/2 right-3 -translate-y-1/2 transform"
-					></span>
-				{/if}
-			</div>
-
-			{#if showResults && searchResults.length > 0}
-				<div
-					class="absolute top-full z-50 mt-1 max-h-40 w-full overflow-y-auto rounded border border-gray-600 bg-gray-700 shadow-xl"
-				>
-					{#each searchResults as result}
-						<button
-							class="w-full border-b border-gray-600 px-3 py-2 text-left text-xs text-gray-200 last:border-b-0 hover:bg-gray-600"
-							onclick={() => selectLocation(result)}
-						>
-							{result.display_name}
-						</button>
-					{/each}
-				</div>
 			{/if}
-		</div>
+			{#if mapType === 'osm' || aligning}
+				<TileLayer
+					url={'https://tile.openstreetmap.org/{z}/{x}/{y}.png'}
+					options={{
+						...TILE_OPTIONS,
+						opacity: aligning ? 0.55 : 1,
+						attribution: '&copy; OpenStreetMap contributors'
+					}}
+					bind:instance={streetLayer}
+				/>
+			{/if}
+			<ControlZoom options={{ position: 'topright' }} />
+			<ControlScale options={{ imperial: false, maxWidth: 150, position: 'bottomright' }} />
 
-		<!-- Map Toggle -->
-		<div class="mb-3 flex gap-1">
-			<button
-				class="btn btn-sm flex-1 gap-1"
-				class:btn-primary={mapType === 'osm'}
-				class:btn-outline={mapType !== 'osm'}
-				onclick={() => (mapType = 'osm')}
-			>
-				<MaterialSymbolsMap class="size-4" />
-				Street
-			</button>
-			<button
-				class="btn btn-sm flex-1 gap-1"
-				class:btn-primary={mapType === 'satellite'}
-				class:btn-outline={mapType !== 'satellite'}
-				onclick={() => (mapType = 'satellite')}
-			>
-				<MaterialSymbolsSatelliteAlt class="size-4" />
-				Satellite
-			</button>
-		</div>
+			{#if project.customer.location && !exportMode}
+				<Marker
+					latLng={project.customer.location}
+					options={{ interactive: false, keyboard: false }}
+				>
+					<DivIcon options={{ className: 'customer-pin', iconSize: [0, 0] }}>
+						<div class="customer-pin-content"><FluentLocation24Filled /></div>
+					</DivIcon>
+				</Marker>
+			{/if}
 
-		<!-- Drawing Controls -->
-		<div class="mb-3 rounded bg-gray-700 p-1">
-			<div class="flex gap-2">
-				{#if !isDrawing}
-					<button onclick={startDrawing} class="btn btn-primary btn-sm flex-1 gap-1">
-						<MaterialSymbolsEdit class="size-4" />
-						Draw Site
-					</button>
-				{:else}
-					<button
-						onclick={finishPolygon}
-						disabled={drawingPoints.length < 3}
-						class="btn btn-success btn-sm flex-1"
-					>
-						<MaterialSymbolsCheck class="size-4" />
-						Finish ({drawingPoints.length})
-					</button>
-					<button onclick={cancelDrawing} class="btn btn-ghost btn-sm">
-						<MaterialSymbolsCancel class="size-4" />
-					</button>
-				{/if}
-			</div>
-		</div>
-
-		<!-- Panel Settings -->
-		<div class="mb-3 rounded bg-gray-700 p-1">
-			<div class="grid grid-cols-2 gap-2 text-xs">
-				<div>
-					<label class="text-gray-400"
-						>Width (m)
-						<input
-							type="number"
-							class="input input-xs mt-1 w-full border-gray-500 bg-gray-600 text-white"
-							min="0.1"
-							max="10"
-							step="0.1"
-							bind:value={panelWidth}
-							onchange={() => {
-								updateSolarPanels();
-								saveToLocalStorage();
-							}}
-						/>
-					</label>
-				</div>
-				<div>
-					<label class="text-gray-400"
-						>Height (m)
-						<input
-							type="number"
-							class="input input-xs mt-1 w-full border-gray-500 bg-gray-600 text-white"
-							min="0.1"
-							max="10"
-							step="0.1"
-							bind:value={panelHeight}
-							onchange={() => {
-								updateSolarPanels();
-								saveToLocalStorage();
-							}}
-						/>
-					</label>
-				</div>
-				<div>
-					<label class="text-gray-400"
-						>Spacing (m)
-						<input
-							type="number"
-							class="input input-xs mt-1 w-full border-gray-500 bg-gray-600 text-white"
-							min="0"
-							max="5"
-							step="0.1"
-							bind:value={panelSpacing}
-							onchange={() => {
-								updateSolarPanels();
-								saveToLocalStorage();
-							}}
-						/>
-					</label>
-				</div>
-				<div>
-					<label class="text-gray-400"
-						>Cost (€)
-						<input
-							type="number"
-							class="input input-xs mt-1 w-full border-gray-500 bg-gray-600 text-white"
-							min="1"
-							max="10000"
-							bind:value={costPerPanel}
-							onchange={() => saveToLocalStorage()}
-						/>
-					</label>
-				</div>
-			</div>
-		</div>
-
-		<!-- Sites List -->
-		{#if polygons.length === 0}
-			<div class="py-6 text-center text-gray-400">
-				<div class="mb-2">
-					<MaterialSymbolsWbSunny class="mx-auto size-8" />
-				</div>
-				<p class="text-sm">Draw sites to start</p>
-			</div>
-		{:else}
-			<div class="flex flex-1 flex-col overflow-hidden">
-				<div class="mb-2 flex items-center justify-between">
-					<span class="text-sm font-medium text-gray-300">Sites ({polygons.length})</span>
-					<button onclick={clearAll} class="btn btn-error btn-xs">
-						<MaterialSymbolsClearAll class="size-4" />
-					</button>
-				</div>
-
-				<div class="flex-1 space-y-2 overflow-y-auto">
-					{#each polygons as polygon, index}
-						<div class="rounded bg-gray-700 p-2">
-							<div class="mb-2 flex items-center justify-between">
-								<span class="text-sm font-medium text-white">Site {index + 1}</span>
-								<button
-									onclick={() => deletePolygon(polygon.id)}
-									class="btn btn-ghost btn-xs h-5 min-h-0 p-0 text-red-400"
-								>
-									<MaterialSymbolsDelete class="size-4" />
-								</button>
-							</div>
-
-							<div class="mb-2 text-xs text-gray-400">
-								<div>Roof angle: {polygon.roofAngle}°</div>
-								<div>Actual area: {polygon.actualArea.toFixed(0)}m²</div>
-							</div>
-
-							<div class="grid grid-cols-3 gap-2 text-xs">
-								<div class="text-center">
-									<div class="font-medium text-blue-400">{polygon.solarPanels.length}</div>
-									<div class="text-gray-400">Panels</div>
-								</div>
-								<div class="text-center">
-									<div class="font-medium text-green-400">{polygon.coverage.toFixed(1)}%</div>
-									<div class="text-gray-400">Cover</div>
-								</div>
-								<div class="text-center">
-									<div class="font-medium text-yellow-400">
-										${((polygon.solarPanels.length * costPerPanel) / 1000).toFixed(0)}k
-									</div>
-									<div class="text-gray-400">Cost</div>
-								</div>
-							</div>
-						</div>
-					{/each}
-				</div>
-
-				<!-- Summary -->
-				<div class="mt-3 rounded bg-blue-600 p-3 text-white">
-					<div class="flex items-center justify-between">
-						<div>
-							<div class="text-lg font-bold">{totalSolarPanels.toLocaleString()}</div>
-							<div class="text-xs opacity-80">Total Panels</div>
-						</div>
-						<div class="text-right">
-							<div class="text-lg font-bold">${(totalCost / 1000).toFixed(0)}k</div>
-							<div class="text-xs opacity-80">Total Cost</div>
-						</div>
-					</div>
-				</div>
-			</div>
-		{/if}
-	</div>
-
-	<!-- Map Container -->
-	<div class="relative h-screen w-screen flex-1">
-		<!-- Drawing Status -->
-		{#if isDrawing}
-			<div class="absolute top-4 right-4 z-[1000]">
-				<div class="alert border-gray-600 bg-gray-800 text-white shadow-xl">
-					<MaterialSymbolsEdit class="size-5" />
-					<div>
-						<div class="font-medium">Drawing Mode</div>
-						<div class="text-xs opacity-80">
-							{#if drawingPoints.length === 0}
-								Click origin point
-							{:else if drawingPoints.length === 1}
-								Set direction
+			{#each project.roofs as roof, i (roof.id)}
+				{@const layout = layouts[i]}
+				{@const selected = selectedId === roof.id}
+				{@const color = roofColor(i)}
+				<Polygon
+					latLngs={roof.outline}
+					options={{
+						color,
+						weight: selected ? 3.5 : 2,
+						fillColor: color,
+						fillOpacity: selected ? 0.22 : 0.1
+					}}
+					onclick={() => selectRoof(roof.id)}
+				/>
+				<!-- Leaflet treats nested rings as a MultiPolygon: one canvas layer for all modules of a roof. -->
+				<Polygon
+					latLngs={layout.panels as unknown as L.LatLngExpression[]}
+					options={{
+						color: '#a9c9ee',
+						weight: 0.75,
+						fillColor: '#16335c',
+						fillOpacity: 0.92,
+						interactive: false
+					}}
+				/>
+				<Polyline
+					latLngs={layout.eave}
+					options={{ color: '#f97316', weight: 4, lineCap: 'round', interactive: false }}
+				/>
+				<Marker latLng={layout.center} options={{ interactive: false, keyboard: false }}>
+					<DivIcon options={{ className: 'roof-label', iconSize: [0, 0] }}>
+						<div
+							class="roof-label-content"
+							class:roof-label-selected={selected}
+							style:--roof-color={color}
+						>
+							<span class="roof-label-number">{i + 1}</span>
+							{roof.pitch}° ·
+							<span class="roof-label-arrow" style:transform="rotate({layout.azimuth}deg)">↑</span>
+							{#if exportMode}
+								{compassLabel(layout.azimuth)} ·
+								{m.plan_label_area({ area: formatNumber(layout.roofArea, 1) })}
 							{:else}
-								Add boundaries
+								{layout.panels.length}
 							{/if}
 						</div>
-					</div>
-				</div>
-			</div>
-		{/if}
-
-		<!-- Roof Angle Dialog -->
-		{#if showRoofAngleDialog}
-			<div
-				class="bg-opacity-50 fixed inset-0 z-[2000] flex items-center justify-center bg-black/30"
-			>
-				<div class="mx-4 max-w-md rounded-lg border border-gray-600 bg-gray-800 p-6">
-					<div class="mb-4 flex items-center gap-3">
-						<MaterialSymbolsRoofing class="size-6 text-blue-500" />
-						<h3 class="text-lg font-bold text-white">Roof Angle</h3>
-					</div>
-					<p class="mb-4 text-sm text-gray-300">
-						Enter the roof angle to calculate the actual roof area. A steeper angle means more
-						actual roof area than what's visible from satellite view.
-					</p>
-					<div class="mb-6">
-						<label class="mb-2 block text-sm font-medium text-gray-300">
-							Roof Angle (degrees)
-
-							<input
-								type="range"
-								min="0"
-								max="60"
-								step="1"
-								bind:value={pendingRoofAngle}
-								class="range range-primary mb-2 w-full"
-							/>
-						</label>
-						<div class="flex justify-between text-xs text-gray-400">
-							<span>0° (Flat)</span>
-							<span class="font-medium text-white">{pendingRoofAngle}°</span>
-							<span>60° (Very steep)</span>
-						</div>
-						{#if pendingPolygonData}
-							<div class="mt-3 rounded bg-gray-700 p-3 text-xs">
-								<div class="grid grid-cols-2 gap-3">
-									<div>
-										<div class="text-gray-400">Projected area:</div>
-										<div class="font-medium text-white">
-											{pendingPolygonData.projectedArea.toFixed(0)}m²
-										</div>
-									</div>
-									<div>
-										<div class="text-gray-400">Actual area:</div>
-										<div class="font-medium text-blue-400">
-											{calculateActualRoofArea(
-												pendingPolygonData.projectedArea,
-												pendingRoofAngle
-											).toFixed(0)}m²
-										</div>
-									</div>
-								</div>
-								<div class="mt-2 text-center text-gray-400">
-									Area multiplier: {(1 / Math.cos((pendingRoofAngle * Math.PI) / 180)).toFixed(2)}x
-								</div>
-							</div>
-						{/if}
-					</div>
-					<div class="flex justify-end gap-3">
-						<button class="btn btn-ghost text-gray-300" onclick={cancelRoofAngle}> Cancel </button>
-						<button class="btn btn-primary" onclick={confirmRoofAngle}> Continue </button>
-					</div>
-				</div>
-			</div>
-		{/if}
-
-		<!-- Performance Warning Dialog -->
-		{#if showPerformanceDialog}
-			<div
-				class="bg-opacity-50 fixed inset-0 z-[2000] flex items-center justify-center bg-black/30"
-			>
-				<div class="mx-4 max-w-md rounded-lg border border-gray-600 bg-gray-800 p-6">
-					<div class="mb-4 flex items-center gap-3">
-						<MaterialSymbolsWarning class="size-6 text-yellow-500" />
-						<h3 class="text-lg font-bold text-white">Performance Warning</h3>
-					</div>
-					<p class="mb-6 text-gray-300">
-						This action will draw a lot of solar panels, which may cause performance issues and slow
-						down the interface.
-					</p>
-					<div class="flex justify-end gap-3">
-						<button class="btn btn-ghost text-gray-300" onclick={cancelAddPolygon}> Cancel </button>
-						<button class="btn btn-warning" onclick={confirmAddPolygon}> Add Anyway </button>
-					</div>
-				</div>
-			</div>
-		{/if}
-
-		<Map
-			options={{
-				center: [51.505, -0.09],
-				zoom: 16,
-				minZoom: 1,
-				maxZoom: 20
-			}}
-			class={'h-full w-full flex-1 flex-col overflow-hidden'}
-			onclick={handleMapClick}
-			bind:instance={mapInstance}
-		>
-			{#if mapType === 'osm'}
-				<TileLayer url={'https://tile.openstreetmap.org/{z}/{x}/{y}.png'} />
-			{:else}
-				<TileLayer
-					url={'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}@2x.png'}
-					attribution="Tiles &copy; Esri"
-				/>
-			{/if}
-
-			<!-- Polygons -->
-			{#each polygons as polygon, index}
-				<Polygon
-					latLngs={polygon.coordinates}
-					options={{
-						color: '#3b82f6',
-						weight: 2,
-						opacity: 0.8,
-						fillOpacity: 0.1
-					}}
-				>
-					<Popup>
-						<div class="rounded bg-gray-800 p-3 text-white">
-							<h3 class="mb-2 font-bold">Site {index + 1}</h3>
-							<div class="space-y-1 text-sm">
-								<div>Panels: <strong>{polygon.solarPanels.length}</strong></div>
-
-								<div>Coverage: <strong>{polygon.coverage.toFixed(1)}%</strong></div>
-								<div>Roof Angle: <strong>{polygon.roofAngle}°</strong></div>
-
-								<div>
-									Cost: <strong
-										>${(polygon.solarPanels.length * costPerPanel).toLocaleString()}</strong
-									>
-								</div>
-							</div>
-						</div>
-					</Popup>
-				</Polygon>
-
-				<!-- Solar Panels -->
-				{#each polygon.solarPanels as panel}
-					<Polygon
-						latLngs={panel.coordinates}
-						options={{
-							color: '#1d4ed8',
-							weight: 1,
-							opacity: 0.7,
-							fillColor:
-								polygon.coverage > 0.9 ? '#22c55e' : polygon.coverage > 0.8 ? '#eab308' : '#ef4444',
-							fillOpacity: 0.6
-						}}
-					/>
-				{/each}
+					</DivIcon>
+				</Marker>
 			{/each}
 
-			<!-- Drawing preview -->
-			{#if isDrawing && drawingPoints.length >= 3}
-				<Polygon
-					latLngs={drawingPoints}
-					options={{
-						color: '#10b981',
-						weight: 2,
-						opacity: 0.7,
-						fillOpacity: 0.2,
-						dashArray: '5, 10'
-					}}
-				/>
-			{/if}
-
-			<!-- Drawing points -->
-			{#if isDrawing}
-				{#each drawingPoints as point, index}
+			{#if drawing}
+				{#if points.length >= 3}
+					<Polygon
+						latLngs={points}
+						options={{
+							color: '#e6a527',
+							weight: 2,
+							fillColor: '#e6a527',
+							fillOpacity: 0.12,
+							dashArray: '6, 8',
+							interactive: false
+						}}
+					/>
+				{:else if points.length === 2}
+					<Polyline latLngs={points} options={{ color: '#e6a527', interactive: false }} />
+				{/if}
+				{#if points.length >= 2}
+					<Polyline
+						latLngs={points.slice(0, 2)}
+						options={{ color: '#f97316', weight: 4, lineCap: 'round', interactive: false }}
+					/>
+				{/if}
+				{#each points as point, index (index)}
 					<CircleMarker
 						latLng={point}
 						options={{
-							radius: 6,
-							fillColor: index === 0 ? '#f87171' : index === 1 ? '#34d399' : '#60a5fa',
-							color: '#ffffff',
+							radius: index === 0 ? 7 : 5,
+							fillColor: index < 2 ? '#f97316' : '#e6a527',
+							color: '#fff7e8',
 							weight: 2,
-							opacity: 1,
-							fillOpacity: 0.8
+							fillOpacity: 1,
+							interactive: index === 0
 						}}
+						onclick={index === 0 ? handleFirstPointClick : undefined}
 					/>
 				{/each}
 			{/if}
 		</Map>
 	</div>
+
+	<aside
+		class="panel absolute inset-x-2 bottom-2 z-[1000] flex max-h-[55svh] flex-col overflow-hidden backdrop-blur-md md:inset-x-auto md:top-3 md:bottom-3 md:left-3 md:max-h-none md:w-[22rem]"
+	>
+		<header
+			class="border-base-content/10 border-b bg-linear-to-br from-amber-500/20 via-rose-500/10 to-sky-500/15 p-4"
+		>
+			<div class="flex items-center gap-3">
+				<div
+					class="bg-primary/15 text-primary grid size-10 shrink-0 place-items-center rounded-full"
+				>
+					<FluentWeatherSunny24Filled class="size-5" />
+				</div>
+				<div class="min-w-0 flex-1">
+					<h1 class="text-base-content text-xl leading-tight">{m.app_name()}</h1>
+					<p class="text-base-content/60 text-xs">{m.app_tagline()}</p>
+				</div>
+				<Button
+					href={resolve('/history')}
+					shape="circle"
+					variant="subtle"
+					size="sm"
+					icon={FluentHistory24Regular}
+					aria-label={m.history()}
+					title={m.history()}
+				/>
+				<Button
+					href={resolve('/settings')}
+					shape="circle"
+					variant="subtle"
+					size="sm"
+					icon={FluentSettings24Regular}
+					aria-label={m.settings()}
+					title={m.settings()}
+				/>
+			</div>
+
+			<div class="mt-4 space-y-2">
+				<div class="flex items-center justify-between">
+					<span class="field-label mb-0!">{m.customer_title()}</span>
+					<Button
+						size="xs"
+						variant="soft-amber"
+						icon={FluentPersonAdd24Regular}
+						onclick={startNewCustomer}
+					>
+						{m.new_customer()}
+					</Button>
+				</div>
+				<div class="relative">
+					<FluentPerson24Regular
+						class="text-base-content/50 pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2"
+					/>
+					<input
+						type="text"
+						autocomplete="name"
+						placeholder={m.customer_name_placeholder()}
+						aria-label={m.customer_name()}
+						class="field-control w-full rounded-full py-2 pr-4 pl-10 text-sm"
+						bind:value={project.customer.name}
+					/>
+				</div>
+				<AddressInput
+					bind:value={project.customer.address}
+					placeholder={m.customer_address_placeholder()}
+					onresolve={locateCustomer}
+				/>
+			</div>
+
+			<div class="mt-3 flex gap-1.5">
+				<Button
+					size="xs"
+					grow
+					variant={mapType === 'satellite' ? 'primary' : 'subtle'}
+					icon={FluentEarth24Regular}
+					onclick={() => (mapType = 'satellite')}
+				>
+					{m.map_satellite()}
+				</Button>
+				<Button
+					size="xs"
+					grow
+					variant={mapType === 'osm' ? 'primary' : 'subtle'}
+					icon={FluentMap24Regular}
+					onclick={() => {
+						mapType = 'osm';
+						aligning = false;
+					}}
+				>
+					{m.map_street()}
+				</Button>
+				<IconButton
+					icon={FluentArrowMove24Regular}
+					label={m.align_imagery_tooltip()}
+					variant={aligning ? 'soft-amber' : 'subtle'}
+					size="xs"
+					onclick={() => (aligning ? (aligning = false) : startAligning())}
+				/>
+			</div>
+		</header>
+
+		<div class="flex-1 space-y-4 overflow-y-auto p-4">
+			<Button
+				block
+				variant={drawing ? 'soft-amber' : 'primary'}
+				icon={FluentEdit24Regular}
+				disabled={drawing}
+				onclick={startDrawing}
+			>
+				{drawing ? m.drawing() : m.draw_roof()}
+			</Button>
+
+			<details class="panel-muted group p-3">
+				<summary class="flex cursor-pointer list-none items-center gap-2.5 select-none">
+					<FluentOptions24Regular class="text-primary size-4" />
+					<span class="flex-1">
+						<span class="editorial-title text-base-content block text-base">{m.module_title()}</span
+						>
+						<span class="text-base-content/55 block text-xs tabular-nums">
+							{formatNumber(settings.length, 2)} × {formatNumber(settings.width, 2)} m ·
+							{settings.watts} Wp · {formatEuro(settings.cost)}
+						</span>
+					</span>
+					<FluentChevronDown24Regular
+						class="text-base-content/50 size-4 transition-transform group-open:rotate-180"
+					/>
+				</summary>
+
+				<div class="mt-3 grid grid-cols-2 gap-x-2 gap-y-3">
+					{#each numberFields as field (field.key)}
+						<label class="block">
+							<span class="field-label">{field.label()}</span>
+							<input
+								type="number"
+								class="field-control w-full rounded-full px-3 py-1.5 text-sm tabular-nums"
+								min={field.min}
+								max={field.max}
+								step={field.step}
+								bind:value={settings[field.key]}
+							/>
+						</label>
+					{/each}
+					<div class="col-span-2">
+						<span class="field-label">{m.orientation()}</span>
+						<div class="flex gap-1.5">
+							<Button
+								size="xs"
+								grow
+								variant={settings.orientation === 'portrait' ? 'soft-amber' : 'subtle'}
+								onclick={() => (settings.orientation = 'portrait')}
+							>
+								{m.portrait()}
+							</Button>
+							<Button
+								size="xs"
+								grow
+								variant={settings.orientation === 'landscape' ? 'soft-amber' : 'subtle'}
+								onclick={() => (settings.orientation = 'landscape')}
+							>
+								{m.landscape()}
+							</Button>
+						</div>
+						<p class="field-hint">
+							{settings.orientation === 'portrait' ? m.portrait_hint() : m.landscape_hint()}
+						</p>
+					</div>
+				</div>
+			</details>
+
+			{#if project.roofs.length > 0}
+				<EconomicsPanel
+					bind:economics={project.economics}
+					result={economicsResult}
+					estimated={roofYields.some((y) => y.source === 'estimate')}
+				/>
+			{/if}
+
+			{#if project.roofs.length === 0}
+				<div class="panel-muted fade_in p-8 text-center">
+					<FluentHome24Regular class="text-base-content/25 mx-auto size-8" />
+					<h3 class="editorial-title text-base-content mt-3 text-lg">{m.empty_title()}</h3>
+					<p class="text-base-content/60 mt-1.5 text-sm">{m.empty_hint()}</p>
+				</div>
+			{:else}
+				<div>
+					<div class="mb-2 flex items-center gap-2">
+						<h2 class="section-title text-base">{m.roofs_title()}</h2>
+						<Badge tone="neutral" size="xs">{project.roofs.length}</Badge>
+						<IconButton
+							icon={FluentDeleteDismiss24Regular}
+							label={m.remove_all_roofs()}
+							variant="soft-red"
+							size="xs"
+							class="ml-auto"
+							onclick={() => {
+								project.roofs = [];
+								selectedId = null;
+							}}
+						/>
+					</div>
+					<div class="space-y-2">
+						{#each project.roofs as roof, i (roof.id)}
+							<RoofCard
+								bind:roof={project.roofs[i]}
+								number={i + 1}
+								color={roofColor(i)}
+								layout={layouts[i]}
+								{settings}
+								selected={selectedId === roof.id}
+								onselect={() => (selectedId = roof.id)}
+								ondelete={() => deleteRoof(roof.id)}
+							/>
+						{/each}
+					</div>
+				</div>
+			{/if}
+		</div>
+
+		{#if project.roofs.length > 0}
+			<footer
+				class="border-base-content/10 border-t bg-linear-to-r from-sky-500/12 via-amber-500/12 to-emerald-500/12 px-4 py-3"
+				data-testid="totals"
+			>
+				<div class="grid grid-cols-3">
+					<div>
+						<div class="editorial-title text-2xl text-sky-300 tabular-nums">
+							{formatNumber(totalPanels)}
+						</div>
+						<div class="text-base-content/55 text-[0.65rem] tracking-wide uppercase">
+							{m.stat_modules()}
+						</div>
+					</div>
+					<div class="text-center">
+						<div class="editorial-title text-2xl text-amber-300 tabular-nums">
+							{formatNumber(totalKwp, 1)}
+						</div>
+						<div class="text-base-content/55 text-[0.65rem] tracking-wide uppercase">
+							{m.stat_kwp()}
+						</div>
+					</div>
+					<div class="text-right">
+						<div class="editorial-title text-2xl text-emerald-300 tabular-nums">
+							{formatEuro(totalPanels * settings.cost)}
+						</div>
+						<div class="text-base-content/55 text-[0.65rem] tracking-wide uppercase">
+							{m.stat_cost()}
+						</div>
+					</div>
+				</div>
+				<div class="mt-3 flex gap-1.5">
+					<Button
+						size="sm"
+						grow
+						variant="subtle"
+						icon={FluentImage24Regular}
+						title={m.export_png_tooltip()}
+						loading={exporting === 'png'}
+						disabled={exporting !== null}
+						onclick={() => runExport('png')}
+					>
+						{m.export_png()}
+					</Button>
+					<Button
+						size="sm"
+						grow
+						icon={FluentDocumentPdf24Regular}
+						title={m.export_pdf_tooltip()}
+						loading={exporting === 'pdf'}
+						disabled={exporting !== null}
+						onclick={() => runExport('pdf')}
+					>
+						{m.export_pdf()}
+					</Button>
+				</div>
+			</footer>
+		{/if}
+	</aside>
+
+	{#if onboarding}
+		<div
+			class="fade_in bg-neutral/45 absolute inset-0 z-[1500] grid place-items-center p-4 backdrop-blur-[2px] md:pl-[23.5rem]"
+		>
+			<form
+				class="panel bg-base-100! w-full max-w-md p-6"
+				role="dialog"
+				aria-modal="true"
+				aria-labelledby="onboarding-title"
+				onsubmit={(e) => {
+					e.preventDefault();
+					startPlanning();
+				}}
+			>
+				<div class="mb-4 flex items-center gap-3">
+					<div class="bg-primary/15 text-primary grid size-11 place-items-center rounded-full">
+						<FluentPersonAdd24Regular class="size-5" />
+					</div>
+					<div>
+						<h2 id="onboarding-title" class="text-base-content text-2xl leading-tight">
+							{m.new_customer()}
+						</h2>
+						<p class="text-base-content/60 text-sm">{m.new_customer_intro()}</p>
+					</div>
+				</div>
+
+				<label class="mb-3 block">
+					<span class="field-label">{m.customer_name()}</span>
+					<!-- svelte-ignore a11y_autofocus -->
+					<input
+						type="text"
+						autocomplete="name"
+						autofocus
+						placeholder={m.customer_name_placeholder()}
+						class="field-control w-full rounded-full px-4 py-2 text-sm"
+						bind:value={project.customer.name}
+					/>
+				</label>
+				<div class="mb-2">
+					<span class="field-label">{m.customer_address()}</span>
+					<AddressInput
+						bind:value={project.customer.address}
+						placeholder={m.customer_address_placeholder()}
+						onresolve={locateCustomer}
+					/>
+				</div>
+				{#if project.customer.location}
+					<p class="field-hint text-success! flex items-center gap-1.5">
+						<FluentCheckmarkCircle24Regular class="size-4" />
+						{project.customer.address}
+					</p>
+				{/if}
+				<p class="field-hint">{m.customer_privacy()}</p>
+
+				<div class="mt-5 flex justify-end gap-2">
+					<Button type="button" variant="ghost" onclick={() => (onboarding = false)}>
+						{m.skip()}
+					</Button>
+					<Button type="submit" icon={FluentEdit24Regular}>{m.start_planning()}</Button>
+				</div>
+			</form>
+		</div>
+	{/if}
+
+	{#if drawing}
+		<div
+			class="panel fade_in absolute top-3 left-1/2 z-[1000] flex max-w-[calc(100%-1.5rem)] -translate-x-1/2 flex-wrap items-center gap-3 py-2 pr-2 pl-4 backdrop-blur-md md:left-[calc(50%+11.75rem)] md:flex-nowrap"
+		>
+			<Badge tone={points.length < 2 ? 'orange' : 'amber'} size="sm">
+				{points.length < 2 ? m.step_eave() : m.step_outline()}
+			</Badge>
+			<span class="text-base-content/80 text-sm md:whitespace-nowrap">
+				{points.length < 2 ? m.hint_eave() : m.hint_outline()}
+			</span>
+			<div class="flex items-center gap-1">
+				<IconButton
+					icon={FluentArrowUndo24Regular}
+					label={m.undo_point()}
+					variant="subtle"
+					size="sm"
+					disabled={points.length === 0}
+					onclick={() => points.pop()}
+				/>
+				<IconButton
+					icon={FluentDismiss24Regular}
+					label={m.cancel_esc()}
+					variant="subtle"
+					size="sm"
+					onclick={stopDrawing}
+				/>
+				<Button
+					size="sm"
+					variant="success"
+					icon={FluentCheckmark24Regular}
+					disabled={points.length < 3}
+					onclick={finishDrawing}
+				>
+					{m.finish()}
+				</Button>
+			</div>
+		</div>
+	{/if}
+
+	{#if aligning}
+		<div
+			class="panel fade_in absolute top-3 left-1/2 z-[1000] flex max-w-[calc(100%-1.5rem)] -translate-x-1/2 flex-wrap items-center gap-3 py-2 pr-2 pl-4 backdrop-blur-md md:left-[calc(50%+11.75rem)] md:flex-nowrap"
+		>
+			<Badge tone="amber" size="sm">{m.align_title()}</Badge>
+			<span class="text-base-content/80 text-sm md:whitespace-nowrap">{m.align_hint()}</span>
+			<div class="flex items-center gap-1">
+				<IconButton
+					icon={FluentArrowLeft24Regular}
+					label={m.shift_west()}
+					variant="subtle"
+					size="sm"
+					onclick={() => nudgeImagery(-ALIGN_STEP, 0)}
+				/>
+				<IconButton
+					icon={FluentArrowUp24Regular}
+					label={m.shift_north()}
+					variant="subtle"
+					size="sm"
+					onclick={() => nudgeImagery(0, ALIGN_STEP)}
+				/>
+				<IconButton
+					icon={FluentArrowDown24Regular}
+					label={m.shift_south()}
+					variant="subtle"
+					size="sm"
+					onclick={() => nudgeImagery(0, -ALIGN_STEP)}
+				/>
+				<IconButton
+					icon={FluentArrowRight24Regular}
+					label={m.shift_east()}
+					variant="subtle"
+					size="sm"
+					onclick={() => nudgeImagery(ALIGN_STEP, 0)}
+				/>
+			</div>
+			<span class="text-base-content/70 w-24 text-center text-xs tabular-nums">
+				E {formatNumber(imageryOffset.east, 2)} m<br />N {formatNumber(imageryOffset.north, 2)} m
+			</span>
+			<IconButton
+				icon={FluentArrowReset24Regular}
+				label={m.reset_offset()}
+				variant="subtle"
+				size="sm"
+				disabled={imageryOffset.east === 0 && imageryOffset.north === 0}
+				onclick={() => (imageryOffset = { east: 0, north: 0 })}
+			/>
+			<Button
+				size="sm"
+				variant="success"
+				icon={FluentCheckmark24Regular}
+				onclick={() => (aligning = false)}
+			>
+				{m.done()}
+			</Button>
+		</div>
+	{/if}
+
+	{#if toast}
+		<div
+			class="panel fade_in text-base-content/85 absolute top-3 left-1/2 z-[1600] flex -translate-x-1/2 items-center gap-2 px-4 py-2 text-sm backdrop-blur-md md:left-[calc(50%+11.75rem)]"
+			role="status"
+		>
+			<FluentCheckmarkCircle24Regular class="text-success size-4" />
+			{toast}
+		</div>
+	{/if}
 </div>
+
+<style>
+	:global(.roof-label),
+	:global(.customer-pin) {
+		pointer-events: none;
+	}
+
+	.roof-label-content {
+		display: flex;
+		width: max-content;
+		transform: translate(-50%, -50%);
+		align-items: center;
+		gap: 0.3rem;
+		border: 1px solid color-mix(in oklab, var(--color-base-content) 15%, transparent);
+		border-radius: 9999px;
+		background: color-mix(in oklab, var(--color-base-100) 88%, transparent);
+		box-shadow: 0 6px 16px rgba(2, 10, 21, 0.35);
+		padding: 0.15rem 0.6rem 0.15rem 0.2rem;
+		font-family: var(--font-sans);
+		font-size: 0.75rem;
+		font-weight: 600;
+		color: var(--color-base-content);
+		white-space: nowrap;
+	}
+
+	.roof-label-selected {
+		border-color: var(--roof-color);
+		box-shadow:
+			0 0 0 2px color-mix(in oklab, var(--roof-color) 45%, transparent),
+			0 6px 16px rgba(2, 10, 21, 0.35);
+	}
+
+	.roof-label-number {
+		display: grid;
+		width: 1.25rem;
+		height: 1.25rem;
+		place-items: center;
+		border-radius: 9999px;
+		background: var(--roof-color, var(--color-primary));
+		color: #0e1d2f;
+		font-size: 0.7rem;
+		font-weight: 700;
+	}
+
+	.roof-label-arrow {
+		display: inline-block;
+		color: var(--color-primary);
+	}
+
+	.customer-pin-content {
+		width: 2rem;
+		height: 2rem;
+		transform: translate(-50%, -100%);
+		color: var(--color-primary);
+		filter: drop-shadow(0 4px 6px rgba(2, 10, 21, 0.5));
+	}
+
+	.customer-pin-content :global(svg) {
+		width: 100%;
+		height: 100%;
+	}
+</style>

@@ -1,22 +1,15 @@
-import adapter from '@sveltejs/adapter-auto';
+import vercel from '@sveltejs/adapter-vercel';
+import bun from 'svelte-adapter-bun';
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
 	runes: true,
-	// Consult https://kit.svelte.dev/docs/integrations#preprocessors
-	// for more information about preprocessors
-	preprocess: [
-		//...
-		vitePreprocess()
-		// sveltePreprocessSvg must be used AFTER other markup preprocessors like mdsvex
-	],
+	preprocess: [vitePreprocess()],
 
 	kit: {
-		// adapter-auto only supports some environments, see https://kit.svelte.dev/docs/adapter-auto for a list.
-		// If your environment is not supported, or you settled on a specific environment, switch out the adapter.
-		// See https://kit.svelte.dev/docs/adapters for more information about adapters.
-		adapter: adapter()
+		// Vercel sets VERCEL=1 during its builds; everywhere else (Docker, local) we build a standalone Bun server.
+		adapter: process.env.VERCEL ? vercel({ runtime: 'experimental_bun1.x' }) : bun()
 	}
 };
 

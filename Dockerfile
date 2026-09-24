@@ -1,24 +1,13 @@
-# Step 1: Build the application
-FROM oven/bun AS builder
-
-# Set the working directory in the container
+FROM oven/bun:1.4 AS builder
 WORKDIR /app
-
-# Copy all the application files to the container
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
 COPY . .
-
-# Run your build process
-RUN bun i
 RUN bun run build
 
-# Step 2: Create a smaller image for running the application
-FROM oven/bun
-
-# Copy only the necessary files from the builder image to the final image
+FROM oven/bun:1.4
+WORKDIR /app
 COPY --from=builder /app/build .
-
-# Expose the port the application will run on
+ENV PORT=3000
 EXPOSE 3000
-
-#Start the BUN server
-CMD ["bun", "run", "start"]
+CMD ["bun", "./index.js"]

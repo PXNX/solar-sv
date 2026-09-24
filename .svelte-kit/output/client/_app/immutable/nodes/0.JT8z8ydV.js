@@ -1,1 +1,0 @@
-import"../chunks/NZTpNUN0.js";import{f as r,s as t,a as s,c as l,r as d}from"../chunks/CsiQVNsO.js";var f=r(`<div class="100dvw 100dvh relative flex flex-row" style="font-family:'HP Simplified'"><!></div>`);function v(e,i){var a=f(),o=l(a);t(o,()=>i.children),d(a),s(e,a)}export{v as component};
