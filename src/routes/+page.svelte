@@ -186,8 +186,17 @@
 		lat: STUTTGART[0],
 		bounds: { south: 0, west: 0, north: 0, east: 0 }
 	});
+	// Official orthophotos are usually sharper, but can be older or shot in worse light than Esri's,
+	// so the user may switch back per preference.
+	const [storedImagerySource, saveImagerySource] = createPersistentState<'official' | 'esri'>(
+		'solar-imagery-source',
+		'official'
+	);
+	let imagerySource = $state(storedImagerySource);
+	$effect(() => saveImagerySource(imagerySource));
+	const availableOrthophotos = $derived(visibleOrthophotos(view.bounds, view.zoom));
 	// While aligning, only the global imagery shows: the official orthophotos are already exact.
-	const orthophotos = $derived(aligning ? [] : visibleOrthophotos(view.bounds, view.zoom));
+	const orthophotos = $derived(aligning || imagerySource === 'esri' ? [] : availableOrthophotos);
 
 	$effect(() => saveOffset($state.snapshot(imageryOffset)));
 
@@ -761,6 +770,37 @@
 					onclick={() => (aligning ? (aligning = false) : startAligning())}
 				/>
 			</div>
+			{#if mapType === 'satellite' && !aligning && availableOrthophotos.length > 0}
+				<div
+					class="mt-1.5 flex gap-1.5"
+					role="group"
+					aria-label={m.imagery_choice()}
+					data-testid="imagery-choice"
+				>
+					<Button
+						size="xs"
+						grow
+						variant={imagerySource === 'official' ? 'soft-blue' : 'ghost'}
+						aria-pressed={imagerySource === 'official'}
+						title={m.imagery_official_hint()}
+						onclick={() => (imagerySource = 'official')}
+					>
+						{m.imagery_official({
+							region: availableOrthophotos.map((source) => source.region).join(' · ')
+						})}
+					</Button>
+					<Button
+						size="xs"
+						grow
+						variant={imagerySource === 'esri' ? 'soft-blue' : 'ghost'}
+						aria-pressed={imagerySource === 'esri'}
+						title={m.imagery_esri_hint()}
+						onclick={() => (imagerySource = 'esri')}
+					>
+						{m.imagery_esri()}
+					</Button>
+				</div>
+			{/if}
 		</header>
 
 		<div class="space-y-4 p-4 md:flex-1 md:overflow-y-auto">

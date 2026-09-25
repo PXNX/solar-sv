@@ -121,6 +121,31 @@ test.describe('state orthophotos', () => {
 		);
 	});
 
+	test('switching to Esri hides the orthophotos and is remembered', async ({ page }) => {
+		await startWithCustomer(page);
+		const choice = page.getByRole('group', { name: 'Aerial imagery' });
+		const official = choice.getByRole('button', { name: 'Official · Baden-Württemberg' });
+		const esri = choice.getByRole('button', { name: 'Esri' });
+		const orthophotos = page.locator('.leaflet-orthophotos-pane img');
+		const attribution = page.locator('.leaflet-control-attribution');
+		await expect(official).toHaveAttribute('aria-pressed', 'true');
+		await expect(orthophotos.first()).toBeAttached();
+
+		await esri.click();
+		await expect(esri).toHaveAttribute('aria-pressed', 'true');
+		await expect(orthophotos).toHaveCount(0);
+		await expect(attribution).not.toContainText('LGL-BW');
+
+		await page.reload();
+		await expect(esri).toHaveAttribute('aria-pressed', 'true');
+		await expect(page.locator('.leaflet-imagery-pane img').first()).toBeAttached();
+		await expect(orthophotos).toHaveCount(0);
+
+		await official.click();
+		await expect(orthophotos.first()).toBeAttached();
+		await expect(attribution).toContainText('LGL-BW');
+	});
+
 	test('outside Germany and when zoomed out only the global imagery loads', async ({
 		page,
 		requests
@@ -130,6 +155,7 @@ test.describe('state orthophotos', () => {
 		await expect(page.locator('.leaflet-imagery-pane img').first()).toBeAttached();
 		expect(requests.orthophotos).toEqual([]);
 		await expect(page.locator('.leaflet-control-attribution')).not.toContainText('LGL-BW');
+		await expect(page.getByTestId('imagery-choice')).toHaveCount(0);
 	});
 });
 
