@@ -1,38 +1,128 @@
-# sv
+# Solar Planner
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+A rooftop PV planner for sales consultants. Look up the customer's address, trace the roof faces on
+satellite imagery, and the app lays out modules at the correct pitch and estimates yield, costs and
+payback. You can then hand the customer a roof plan (PNG) and a proposal (PDF).
 
-## Creating a project
+Built with SvelteKit 2 and Svelte 5, Leaflet via [sveaflet](https://github.com/sveaflet/sveaflet),
+Tailwind 4 and daisyUI 5. It runs entirely on [Bun](https://bun.sh), both locally and on Vercel.
 
-If you're seeing this, you've probably already done this step. Congrats!
+## Features
 
-```bash
-# create a new project in the current directory
-npx sv create
+- **Customer first.** Enter a name and address. The address is geocoded with OpenStreetMap
+  Nominatim, a pin marks the house, and the map flies there. By default the map starts in Stuttgart.
+- **Roof drawing.** The first edge you draw is the eave, with the start point in red and the end point
+  in green. While you draw, a live compass badge shows which way the face will point. Click the first
+  point or press <kbd>Enter</kbd> to finish, <kbd>Backspace</kbd> to undo and <kbd>Esc</kbd> to cancel.
+- **Correct module layout.** Each roof face gets one rigid grid aligned to its eave. Pitch
+  foreshortens the up-slope dimensions by `cos(pitch)`, as seen from above. Modules only count if
+  they fit completely inside the outline, and the grid offset that fits the most modules wins.
+- **Yield.** Yields come from [PVGIS](https://re.jrc.ec.europa.eu/pvg_tools/) per roof (tilt and
+  azimuth), fetched through a small Bun server route. Results are cached locally, and a simple model
+  takes over when you are offline.
+- **Economics.** Enter annual consumption (with hints for 1–5 person households), electricity price
+  and feed-in tariff, plus an optional battery with capacity and price. The app shows autarky,
+  self-consumption, annual benefit, payback and 20-year value.
+- **Exports.**
+  - PNG roof plan: a fixed 2400 × 1500 image on every device, showing roofs with area, facing and
+    pitch.
+  - A4 PDF proposal: branding, customer, the map, a roof table, economics, assumptions and the module
+    spec, all as real text.
+- **Branding.** Set a logo (with a crop picker), company, consultant and contact details on the
+  settings page. They are stored in `localStorage`.
+- **History.** "New customer" archives the current project. Old projects can be searched, reopened
+  and deleted.
+- **Imagery alignment.** Nudge the satellite layer by a few metres so it matches the street map.
+- **German and English.** The language follows the browser, and you can override it in the settings
+  ([Paraglide JS](https://inlang.com/m/gerre34r/library-inlang-paraglideJs)).
+- **Installable PWA.** It works offline once visited, and map tiles you have viewed are cached.
+- **Privacy page (DSGVO).** There are no cookies and no tracking. Fonts are self-hosted, and all
+  project data stays in the browser.
 
-# create a new project in my-app
-npx sv create my-app
+## Getting started
+
+Requires [Bun](https://bun.sh) 1.4 or newer. Node.js is not needed.
+
+```sh
+bun install
+bun run dev        # http://localhost:3021
 ```
 
-## Developing
+| Script              | What it does                                              |
+| ------------------- | --------------------------------------------------------- |
+| `bun run dev`       | Vite dev server (on Bun)                                  |
+| `bun run build`     | Production build into `build/`                            |
+| `bun run start`     | Serve the production build with Bun                       |
+| `bun run preview`   | Vite preview of the build                                 |
+| `bun run check`     | `svelte-check` type checking                              |
+| `bun run lint`      | Prettier and ESLint                                       |
+| `bun run test:unit` | Unit tests for layout geometry and economics (`bun test`) |
+| `bun run test:e2e`  | Playwright end-to-end tests (desktop and Pixel 7)         |
+| `bun run test`      | Both                                                      |
 
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+Install the browser once before the first E2E run: `bunx playwright install chromium`. The suite
+builds the app, serves it on port 4173 and mocks map tiles, Nominatim and PVGIS, so it runs offline.
+To also hit the real PVGIS API, set `PVGIS=1`.
 
-```bash
-npm run dev
+## Deployment
 
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
+### Vercel
+
+`vercel.json` pins `bunVersion`, so installs, builds and the server function all run on Bun. When the
+`VERCEL` environment variable is present, `svelte.config.js` switches to `@sveltejs/adapter-vercel`
+with the `experimental_bun1.x` runtime. No further setup is needed.
+
+### Docker / self-hosted
+
+Without `VERCEL`, the app builds with `svelte-adapter-bun`:
+
+```sh
+docker build -t solar-planner .
+docker run -p 3000:3000 solar-planner
 ```
 
-## Building
+Or, without Docker: `bun run build && bun run start`.
 
-To create a production version of your app:
+## Before going live
 
-```bash
-npm run build
+Fill in the operator details (name, address, contact) in `src/lib/legal.ts`. Until then, the privacy
+page shows a warning. Also review the privacy text in `src/routes/privacy/+page.svelte` against your
+actual hosting setup.
+
+## Project structure
+
+```
+src/
+  routes/
+    +page.svelte          planner: map, drawing, sidebar, exports
+    api/yield/+server.ts  PVGIS proxy (PVGIS has no CORS)
+    history/              archived customers
+    settings/             language, branding, app install
+    privacy/              DSGVO / GDPR notice
+  lib/
+    solar/layout.ts       roof projection, grid packing, azimuth
+    solar/economics.ts    self-consumption, battery, payback
+    solar/yield.ts        PVGIS client, cache, offline estimate
+    report/pdf.ts         jsPDF proposal
+    utils/screenshot.ts   html2canvas-pro map capture
+    components/           roof card, economics panel, address search, logo cropper, UI kit
+    branding.ts           branding and customer types and persistence
+    projects.ts           current project and history
+    language.ts           language override for Paraglide
+messages/{en,de}.json     translations
+e2e/                      Playwright specs and fixtures
+tests/unit/               bun test specs
 ```
 
-You can preview the production build with `npm run preview`.
+## Translations
 
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+Strings live in `messages/en.json` and `messages/de.json`. Keep both files in sync. Paraglide
+compiles them into `src/lib/paraglide/` (git-ignored) during dev and build. Use them in components as
+`m.key({ ...params })`.
+
+## Data sources
+
+- Imagery: Esri World Imagery. Streets: © OpenStreetMap contributors.
+- Geocoding: OpenStreetMap Nominatim, subject to its
+  [usage policy](https://operations.osmfoundation.org/policies/nominatim/).
+- Yields: PVGIS © European Union, JRC.

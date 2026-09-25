@@ -19,10 +19,9 @@ test.describe('exports', () => {
 		expect(file.suggestedFilename()).toMatch(/^erika-muster-roof-plan-\d{4}-\d{2}-\d{2}\.png$/);
 		const bytes = await downloadBytes(file);
 		expect(bytes.subarray(0, 8).equals(PNG_SIGNATURE)).toBe(true);
-		const width = bytes.readUInt32BE(16);
-		const height = bytes.readUInt32BE(20);
-		expect(width).toBeGreaterThanOrEqual(1400);
-		expect(height).toBeGreaterThanOrEqual(900);
+		// Fixed 1600 × 1000 frame at 1.5×, regardless of the browser window.
+		expect(bytes.readUInt32BE(16)).toBe(2400);
+		expect(bytes.readUInt32BE(20)).toBe(1500);
 	});
 
 	test('the map returns to the planning view after an export', async ({ page }) => {

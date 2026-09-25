@@ -49,6 +49,7 @@
 	import { roofColor } from '$lib/solar/colors';
 	import {
 		DEFAULT_SETTINGS,
+		facingAzimuth,
 		layoutRoof,
 		type LatLng,
 		type PanelSettings,
@@ -69,6 +70,8 @@
 
 	const STUTTGART: LatLng = [48.7758, 9.1829];
 	const DEFAULT_PITCH = 35;
+	/** CSS size and pixel ratio of exported map images, independent of the device. */
+	const EXPORT_FRAME = { width: 1600, height: 1000, scale: 1.5 };
 	const TILE_OPTIONS = { maxNativeZoom: 19, maxZoom: 22, crossOrigin: 'anonymous' as const };
 
 	const [storedSettings, saveSettings] = createPersistentState<PanelSettings>(
@@ -230,11 +233,39 @@
 		if (drawing) points.push([e.latlng.lat, e.latlng.lng]);
 	}
 
+	/** Pointer position while drawing, to preview which way the roof will face. */
+	let cursor = $state<LatLng | null>(null);
+
+	function handleMouseMove(e: L.LeafletMouseEvent) {
+		if (drawing && points.length >= 2) cursor = [e.latlng.lat, e.latlng.lng];
+	}
+
+	const EAVE_START_COLOR = '#ef4444';
+	const EAVE_END_COLOR = '#22c55e';
+
+	const drawingPreview = $derived.by(() => {
+		if (!drawing || points.length < 2) return null;
+		const eave: [LatLng, LatLng] = [points[0], points[1]];
+		// Once the outline has a third point its centre decides the side; before that, the pointer.
+		const inside: LatLng | null =
+			points.length >= 3
+				? [
+						points.reduce((sum, p) => sum + p[0], 0) / points.length,
+						points.reduce((sum, p) => sum + p[1], 0) / points.length
+					]
+				: cursor;
+		const azimuth = inside ? facingAzimuth(eave, inside) : null;
+		if (azimuth === null) return null;
+		const midpoint: LatLng = [(eave[0][0] + eave[1][0]) / 2, (eave[0][1] + eave[1][1]) / 2];
+		return { azimuth, midpoint };
+	});
+
 	function startDrawing() {
 		aligning = false;
 		onboarding = false;
 		drawing = true;
 		points = [];
+		cursor = null;
 		selectedId = null;
 		map?.doubleClickZoom.disable();
 	}
@@ -242,6 +273,7 @@
 	function stopDrawing() {
 		drawing = false;
 		points = [];
+		cursor = null;
 		map?.doubleClickZoom.enable();
 	}
 
@@ -353,16 +385,25 @@
 		exportMode = true;
 		selectedId = null;
 		try {
+			// Render into a fixed landscape frame so phones and desktops produce the same image.
+			await tick();
+			map.invalidateSize({ animate: false });
 			const outline = project.roofs.flatMap((r) => r.outline);
 			if (outline.length > 0) {
 				map.fitBounds(L.latLngBounds(outline), { padding: [90, 90], maxZoom: 21, animate: false });
 			}
 			await tick();
 			await waitForTiles();
-			return await renderElement(mapElement);
+			return await renderElement(mapElement, {
+				width: EXPORT_FRAME.width,
+				height: EXPORT_FRAME.height,
+				scale: EXPORT_FRAME.scale
+			});
 		} finally {
 			exportMode = false;
 			selectedId = previous.selected;
+			await tick();
+			map.invalidateSize({ animate: false });
 			map.setView(previous.center, previous.zoom, { animate: false });
 		}
 	}
@@ -414,10 +455,18 @@
 <svelte:window onkeydown={handleKeydown} />
 
 <div class="bg-neutral relative h-svh w-full overflow-hidden">
-	<div class="absolute inset-0" class:cursor-crosshair={drawing} bind:this={mapElement}>
+	<div
+		class="absolute inset-0"
+		class:cursor-crosshair={drawing}
+		class:export-frame={exportMode}
+		style:--export-width="{EXPORT_FRAME.width}px"
+		style:--export-height="{EXPORT_FRAME.height}px"
+		bind:this={mapElement}
+	>
 		<Map
 			options={MAP_OPTIONS}
 			onclick={handleMapClick}
+			onmousemove={handleMouseMove}
 			onzoomanim={(e: L.ZoomAnimEvent) => updateView(e.zoom)}
 			onzoomend={() => updateView()}
 			onmoveend={() => updateView()}
@@ -531,8 +580,8 @@
 					<CircleMarker
 						latLng={point}
 						options={{
-							radius: index === 0 ? 7 : 5,
-							fillColor: index < 2 ? '#f97316' : '#e6a527',
+							radius: index < 2 ? 7 : 5,
+							fillColor: index === 0 ? EAVE_START_COLOR : index === 1 ? EAVE_END_COLOR : '#e6a527',
 							color: '#fff7e8',
 							weight: 2,
 							fillOpacity: 1,
@@ -541,12 +590,29 @@
 						onclick={index === 0 ? handleFirstPointClick : undefined}
 					/>
 				{/each}
+				{#if drawingPreview}
+					<Marker
+						latLng={drawingPreview.midpoint}
+						options={{ interactive: false, keyboard: false }}
+					>
+						<DivIcon options={{ className: 'roof-label', iconSize: [0, 0] }}>
+							<div class="facing-preview" data-testid="facing-preview-marker">
+								<span
+									class="facing-preview-arrow"
+									style:transform="rotate({drawingPreview.azimuth}deg)">↑</span
+								>
+								{compassLabel(drawingPreview.azimuth)}
+							</div>
+						</DivIcon>
+					</Marker>
+				{/if}
 			{/if}
 		</Map>
 	</div>
 
 	<aside
-		class="panel absolute inset-x-2 bottom-2 z-[1000] flex max-h-[55svh] flex-col overflow-hidden backdrop-blur-md md:inset-x-auto md:top-3 md:bottom-3 md:left-3 md:max-h-none md:w-[22rem]"
+		class="panel absolute inset-x-2 bottom-2 z-[1000] flex max-h-[42svh] flex-col overflow-y-auto overscroll-contain backdrop-blur-md md:inset-x-auto md:top-3 md:bottom-3 md:left-3 md:max-h-none md:w-[22rem] md:overflow-hidden"
+		data-testid="sidebar"
 	>
 		<header
 			class="border-base-content/10 border-b bg-linear-to-br from-amber-500/20 via-rose-500/10 to-sky-500/15 p-4"
@@ -645,7 +711,7 @@
 			</div>
 		</header>
 
-		<div class="flex-1 space-y-4 overflow-y-auto p-4">
+		<div class="space-y-4 p-4 md:flex-1 md:overflow-y-auto">
 			<Button
 				block
 				variant={drawing ? 'soft-amber' : 'primary'}
@@ -824,13 +890,13 @@
 
 	{#if onboarding}
 		<div
-			class="fade_in bg-neutral/45 absolute inset-0 z-[1500] grid place-items-center p-4 backdrop-blur-[2px] md:pl-[23.5rem]"
+			class="fade_in bg-neutral/45 absolute inset-0 z-[1500] grid place-items-center overflow-y-auto p-4 backdrop-blur-[2px] md:pl-[23.5rem]"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="onboarding-title"
 		>
 			<form
 				class="panel bg-base-100! w-full max-w-md p-6"
-				role="dialog"
-				aria-modal="true"
-				aria-labelledby="onboarding-title"
 				onsubmit={(e) => {
 					e.preventDefault();
 					startPlanning();
@@ -893,9 +959,29 @@
 			<Badge tone={points.length < 2 ? 'orange' : 'amber'} size="sm">
 				{points.length < 2 ? m.step_eave() : m.step_outline()}
 			</Badge>
-			<span class="text-base-content/80 text-sm md:whitespace-nowrap">
+			<span class="text-base-content/80 flex items-center gap-1.5 text-sm md:whitespace-nowrap">
+				{#if points.length < 2}
+					<span class="size-2.5 rounded-full" style:background-color={EAVE_START_COLOR}></span>
+					<span class="text-base-content/40">→</span>
+					<span class="size-2.5 rounded-full" style:background-color={EAVE_END_COLOR}></span>
+				{/if}
 				{points.length < 2 ? m.hint_eave() : m.hint_outline()}
 			</span>
+			{#if drawingPreview}
+				<Badge tone="green" size="sm">
+					<span
+						class="inline-block"
+						style:transform="rotate({drawingPreview.azimuth}deg)"
+						data-testid="facing-preview-arrow">↑</span
+					>
+					<span data-testid="facing-preview">
+						{m.facing_preview({
+							direction: compassLabel(drawingPreview.azimuth),
+							degrees: drawingPreview.azimuth.toFixed(0)
+						})}
+					</span>
+				</Badge>
+			{/if}
 			<div class="flex items-center gap-1">
 				<IconButton
 					icon={FluentArrowUndo24Regular}
@@ -995,6 +1081,15 @@
 </div>
 
 <style>
+	.export-frame {
+		position: fixed;
+		inset: auto;
+		top: 0;
+		left: 0;
+		width: var(--export-width);
+		height: var(--export-height);
+	}
+
 	:global(.roof-label),
 	:global(.customer-pin) {
 		pointer-events: none;
@@ -1035,6 +1130,29 @@
 		color: #0e1d2f;
 		font-size: 0.7rem;
 		font-weight: 700;
+	}
+
+	.facing-preview {
+		display: flex;
+		width: max-content;
+		transform: translate(-50%, 0.6rem);
+		align-items: center;
+		gap: 0.3rem;
+		border-radius: 9999px;
+		background: #22c55e;
+		box-shadow: 0 6px 16px rgba(2, 10, 21, 0.4);
+		padding: 0.15rem 0.6rem;
+		font-family: var(--font-sans);
+		font-size: 0.8rem;
+		font-weight: 700;
+		color: #06240f;
+		white-space: nowrap;
+	}
+
+	.facing-preview-arrow {
+		display: inline-block;
+		font-size: 1rem;
+		line-height: 1;
 	}
 
 	.roof-label-arrow {

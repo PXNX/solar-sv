@@ -39,24 +39,26 @@ export function persistedBranding() {
 	);
 }
 
-/** Reads an image file and returns it as a PNG data URL no larger than the given box. */
-export function imageFileToDataUrl(file: File, maxWidth = 600, maxHeight = 300): Promise<string> {
-	return new Promise((resolve, reject) => {
-		const url = URL.createObjectURL(file);
-		const img = new Image();
-		img.onload = () => {
-			URL.revokeObjectURL(url);
-			const scale = Math.min(1, maxWidth / img.naturalWidth, maxHeight / img.naturalHeight);
-			const canvas = document.createElement('canvas');
-			canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
-			canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
-			canvas.getContext('2d')?.drawImage(img, 0, 0, canvas.width, canvas.height);
-			resolve(canvas.toDataURL('image/png'));
-		};
-		img.onerror = () => {
-			URL.revokeObjectURL(url);
-			reject(new Error('Unsupported image'));
-		};
-		img.src = url;
-	});
+export interface CropRect {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+}
+
+/** Cuts `crop` (natural image pixels) out of `image` as a PNG data URL no larger than the box. */
+export function cropToDataUrl(
+	image: HTMLImageElement,
+	crop: CropRect,
+	maxWidth = 600,
+	maxHeight = 300
+): string {
+	const scale = Math.min(1, maxWidth / crop.width, maxHeight / crop.height);
+	const canvas = document.createElement('canvas');
+	canvas.width = Math.max(1, Math.round(crop.width * scale));
+	canvas.height = Math.max(1, Math.round(crop.height * scale));
+	canvas
+		.getContext('2d')
+		?.drawImage(image, crop.x, crop.y, crop.width, crop.height, 0, 0, canvas.width, canvas.height);
+	return canvas.toDataURL('image/png');
 }

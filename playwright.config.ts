@@ -27,7 +27,8 @@ export default defineConfig({
 	projects: [
 		{
 			name: 'desktop',
-			use: { ...devices['Desktop Chrome'], viewport: { width: 1400, height: 900 } }
+			use: { ...devices['Desktop Chrome'], viewport: { width: 1400, height: 900 } },
+			testIgnore: '**/mobile.e2e.ts'
 		},
 		{
 			name: 'mobile',

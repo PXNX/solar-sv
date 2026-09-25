@@ -43,6 +43,8 @@ test.describe('drawing roof faces', () => {
 
 	test('switching module orientation re-packs the roof', async ({ page }) => {
 		await drawRoof(page);
+		// At 35° this roof fits 72 modules either way (12 × 6 vs 8 × 9); flat it does not.
+		await page.getByLabel('Pitch').fill('0');
 		const modules = page.getByTestId('roof-modules');
 		const portrait = await modules.innerText();
 		await page.getByText('Module', { exact: true }).click();
@@ -58,6 +60,30 @@ test.describe('drawing roof faces', () => {
 		await page.getByText('Module', { exact: true }).click();
 		await page.getByLabel('Length (m)').fill('2.2');
 		await expect.poll(async () => Number(await modules.innerText())).toBeLessThan(before);
+	});
+
+	test('the toolbar previews which way the roof will face', async ({ page }) => {
+		await page.getByRole('button', { name: 'Draw roof face' }).click();
+		const box = (await page.locator('.leaflet-container').boundingBox())!;
+		const x = box.x + box.width / 2 + 120;
+		const y = box.y + box.height / 2;
+		await page.mouse.click(x - 60, y + 40);
+		await page.mouse.click(x + 60, y + 40);
+		const preview = page.getByTestId('facing-preview');
+
+		// Pointer above the west-east eave: the roof rises northwards and faces south.
+		await page.mouse.move(x, y - 30);
+		await expect(preview).toHaveText('Faces S · 180°');
+		await expect(page.getByTestId('facing-preview-marker')).toContainText('S');
+
+		// Below the eave it would face north.
+		await page.mouse.move(x, y + 90);
+		await expect(preview).toHaveText('Faces N · 0°');
+
+		// Once the outline has a third point, that side wins over the pointer.
+		await page.mouse.click(x + 60, y - 40);
+		await page.mouse.move(x, y + 90);
+		await expect(preview).toHaveText('Faces S · 180°');
 	});
 
 	test('finish needs three points, undo and escape work', async ({ page }) => {

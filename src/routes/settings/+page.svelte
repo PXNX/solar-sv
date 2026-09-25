@@ -9,40 +9,39 @@
 	import FluentCheckmarkCircle24Regular from '~icons/fluent/checkmark-circle-24-regular';
 	import FluentShieldLock24Regular from '~icons/fluent/shield-lock-24-regular';
 	import { Button } from '$lib/components/ui';
-	import { imageFileToDataUrl, persistedBranding } from '$lib/branding';
+	import { persistedBranding } from '$lib/branding';
+	import LogoCropper from '$lib/components/LogoCropper.svelte';
 	import { pwa, promptInstall } from '$lib/pwa.svelte';
-	import { getLocale, locales, setLocale } from '$lib/paraglide/runtime';
+	import { getLocale, locales } from '$lib/paraglide/runtime';
+	import { chooseLanguage, LANGUAGE_KEY } from '$lib/language';
 	import { m } from '$lib/paraglide/messages';
 
-	const LOCALE_STORAGE_KEY = 'PARAGLIDE_LOCALE';
 	const LANGUAGE_NAMES: Record<string, string> = { en: 'English', de: 'Deutsch' };
 
 	const [storedBranding, saveBranding] = persistedBranding();
 	let branding = $state(storedBranding);
 	$effect(() => saveBranding($state.snapshot(branding)));
 
-	let languageChoice = $state(localStorage.getItem(LOCALE_STORAGE_KEY) ? getLocale() : 'auto');
+	let languageChoice = $state(localStorage.getItem(LANGUAGE_KEY) ? getLocale() : 'auto');
 	let logoError = $state(false);
 	let fileInput: HTMLInputElement;
 
-	function chooseLanguage(choice: string) {
-		if (choice === 'auto') {
-			localStorage.removeItem(LOCALE_STORAGE_KEY);
-			location.reload();
-		} else {
-			setLocale(choice as (typeof locales)[number]);
-		}
+	/** Object URL of a freshly picked logo, shown in the crop dialog until applied. */
+	let cropSource = $state<string | null>(null);
+
+	function handleLogo(event: Event) {
+		const input = event.target as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
+		logoError = !file?.type.startsWith('image/');
+		if (!file || logoError) return;
+		cropSource = URL.createObjectURL(file);
 	}
 
-	async function handleLogo(event: Event) {
-		const file = (event.target as HTMLInputElement).files?.[0];
-		if (!file) return;
-		logoError = false;
-		try {
-			branding.logo = await imageFileToDataUrl(file);
-		} catch {
-			logoError = true;
-		}
+	function closeCropper(dataUrl?: string) {
+		if (dataUrl) branding.logo = dataUrl;
+		if (cropSource) URL.revokeObjectURL(cropSource);
+		cropSource = null;
 	}
 
 	const textFields = [
@@ -92,7 +91,7 @@
 						variant={languageChoice === choice ? 'primary' : 'subtle'}
 						onclick={() => {
 							languageChoice = choice;
-							chooseLanguage(choice);
+							chooseLanguage(choice === 'auto' ? null : choice);
 						}}
 					>
 						{choice === 'auto' ? m.language_auto() : LANGUAGE_NAMES[choice]}
@@ -214,3 +213,7 @@
 		</section>
 	</main>
 </div>
+
+{#if cropSource}
+	<LogoCropper src={cropSource} onapply={closeCropper} oncancel={() => closeCropper()} />
+{/if}

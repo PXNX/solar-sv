@@ -1,6 +1,7 @@
 import { drawRoof, expect, MOCK_YIELD, startWithCustomer, test } from './fixtures';
 
-const euros = (text: string) => Number(text.replace(/[^\d.-]/g, ''));
+/** First line of a result tile (the value), as a number. */
+const euros = (text: string) => Number(text.split('\n')[0].replace(/[^\d.-]/g, ''));
 
 test.describe('economics', () => {
 	test.beforeEach(async ({ page }) => {
@@ -30,7 +31,7 @@ test.describe('economics', () => {
 			[3, '3500'],
 			[5, '5000']
 		] as const) {
-			await page.getByRole('button', { name: `${people} people`, exact: false }).click();
+			await page.getByRole('button', { name: `Household of ${people} ·` }).click();
 			await expect(consumption).toHaveValue(kwh);
 		}
 	});
@@ -45,7 +46,7 @@ test.describe('economics', () => {
 
 		await page.getByLabel('Battery storage').check();
 		await page.getByLabel('Capacity (kWh)').fill('8');
-		await page.getByLabel('Price (€)').fill('5000');
+		await page.getByLabel('Price (€)', { exact: true }).fill('5000');
 
 		await expect.poll(async () => euros(await investment.innerText())).toBe(before + 5000);
 		expect(euros(await autarky.innerText())).toBeGreaterThan(autarkyBefore);
@@ -53,7 +54,7 @@ test.describe('economics', () => {
 
 	test('higher electricity prices shorten the payback', async ({ page }) => {
 		const payback = page.getByTestId('economics-payback');
-		const years = async () => Number((await payback.innerText()).match(/[\d.]+/)![0]);
+		const years = async () => euros(await payback.innerText());
 		await page.getByLabel('Electricity (€/kWh)').fill('0.30');
 		const cheap = await years();
 		await page.getByLabel('Electricity (€/kWh)').fill('0.50');

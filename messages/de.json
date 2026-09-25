@@ -28,8 +28,8 @@
 	"stat_cost": "Kosten",
 	"step_eave": "Schritt 1 · Traufe",
 	"step_outline": "Schritt 2 · Umriss",
-	"hint_eave": "Beide Enden der Traufkante anklicken",
-	"hint_outline": "Dachfläche umfahren, zum Schließen den ersten Punkt anklicken",
+	"hint_eave": "Traufe anklicken: Anfang, dann Ende",
+	"hint_outline": "Auf der ansteigenden Seite weiterzeichnen – der Pfeil zeigt die Ausrichtung",
 	"undo_point": "Letzten Punkt entfernen (Rücktaste)",
 	"cancel_esc": "Abbrechen (Esc)",
 	"finish": "Fertig",
@@ -139,7 +139,7 @@
 	"economics_title": "Wirtschaftlichkeit",
 	"economics_summary": "{kwh} kWh/Jahr · Amortisation {years}",
 	"household": "Haushaltsgröße",
-	"household_option": "{n} Personen · {kwh} kWh",
+	"household_option": "{n}-Personen-Haushalt · {kwh} kWh",
 	"household_hint": "Richtwerte für ein Haus ohne elektrische Heizung.",
 	"field_consumption": "Verbrauch (kWh/Jahr)",
 	"field_electricity_price": "Strompreis (€/kWh)",
@@ -168,5 +168,11 @@
 	"battery_none": "keiner",
 	"battery_summary": "{capacity} kWh · {price}",
 	"report_pvgis_credit": "Ertragsdaten: PVGIS (c) Europäische Union",
-	"privacy": "Datenschutz"
+	"privacy": "Datenschutz",
+	"crop_title": "Logo zuschneiden",
+	"crop_hint": "Rahmen oder Ecken ziehen, um den gewünschten Bildausschnitt zu wählen.",
+	"crop_apply": "Logo übernehmen",
+	"crop_cancel": "Abbrechen",
+	"crop_reset": "Ganzes Bild",
+	"facing_preview": "Ausrichtung {direction} · {degrees}°"
 }

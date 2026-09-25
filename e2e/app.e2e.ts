@@ -67,7 +67,9 @@ test.describe('imagery alignment', () => {
 
 		await page.getByRole('button', { name: 'Done' }).click();
 		await page.reload();
-		const offset = await page.evaluate(() => JSON.parse(localStorage.getItem('solar-imagery-offset')!));
+		const offset = await page.evaluate(() =>
+			JSON.parse(localStorage.getItem('solar-imagery-offset')!)
+		);
 		expect(offset).toEqual({ east: 0.5, north: 0.25 });
 	});
 });
@@ -82,7 +84,9 @@ test.describe('PWA', () => {
 		});
 		const sizes = manifest.icons.map((icon: { sizes: string }) => icon.sizes);
 		expect(sizes).toEqual(expect.arrayContaining(['192x192', '512x512']));
-		expect(manifest.icons.some((icon: { purpose?: string }) => icon.purpose === 'maskable')).toBe(true);
+		expect(manifest.icons.some((icon: { purpose?: string }) => icon.purpose === 'maskable')).toBe(
+			true
+		);
 		for (const icon of manifest.icons) {
 			expect((await request.get(icon.src)).ok()).toBe(true);
 		}

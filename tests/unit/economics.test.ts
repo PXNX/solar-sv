@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { computeEconomics, DEFAULT_ECONOMICS, HOUSEHOLD_PRESETS, type Economics } from '../../src/lib/solar/economics';
+import {
+	computeEconomics,
+	DEFAULT_ECONOMICS,
+	HOUSEHOLD_PRESETS,
+	type Economics
+} from '../../src/lib/solar/economics';
 import { estimateYield, yieldKey } from '../../src/lib/solar/yield';
 
 const economics = (overrides: Partial<Economics> = {}): Economics => ({
@@ -25,9 +30,15 @@ describe('computeEconomics', () => {
 	});
 
 	test('investment adds other costs per kWp and the battery price', () => {
-		const e = economics({ otherCostsPerKwp: 800, battery: { enabled: true, capacity: 10, price: 6000 } });
+		const e = economics({
+			otherCostsPerKwp: 800,
+			battery: { enabled: true, capacity: 10, price: 6000 }
+		});
 		expect(computeEconomics(8000, 8, 5000, e).investment).toBe(5000 + 8 * 800 + 6000);
-		const noBattery = economics({ otherCostsPerKwp: 800, battery: { enabled: false, capacity: 10, price: 6000 } });
+		const noBattery = economics({
+			otherCostsPerKwp: 800,
+			battery: { enabled: false, capacity: 10, price: 6000 }
+		});
 		expect(computeEconomics(8000, 8, 5000, noBattery).investment).toBe(5000 + 8 * 800);
 	});
 
