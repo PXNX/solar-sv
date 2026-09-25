@@ -17,6 +17,8 @@ export interface ProposalInput {
 	economics: Economics;
 	result: EconomicsResult;
 	map: HTMLCanvasElement;
+	/** Plain-text credits of the imagery shown on the map. */
+	imageryCredits?: string[];
 	date?: Date;
 }
 
@@ -132,7 +134,10 @@ export function createProposalPdf(input: ProposalInput): Blob {
 	doc.rect(mapX, y, mapW, mapH);
 	y += mapH + 4;
 	font(7.5, 'normal', MUTED);
-	const caption = doc.splitTextToSize(safe(m.report_map_caption()), CONTENT_W);
+	const credits = input.imageryCredits?.length
+		? ` ${m.report_imagery_credit({ sources: input.imageryCredits.join('; ') })}`
+		: '';
+	const caption = doc.splitTextToSize(safe(m.report_map_caption() + credits), CONTENT_W);
 	doc.text(caption, MARGIN, y);
 	y += caption.length * 3.4 + 4;
 

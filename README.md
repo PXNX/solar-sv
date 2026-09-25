@@ -32,7 +32,16 @@ Tailwind 4 and daisyUI 5. It runs entirely on [Bun](https://bun.sh), both locall
   settings page. They are stored in `localStorage`.
 - **History.** "New customer" archives the current project. Old projects can be searched, reopened
   and deleted.
-- **Imagery alignment.** Nudge the satellite layer by a few metres so it matches the street map.
+- **Sharp official aerial imagery.** In nine German states the map shows the survey offices'
+  open-data orthophotos (10–40 cm per pixel) instead of global satellite imagery:
+  Baden-Württemberg, Bavaria, Berlin/Brandenburg, Lower Saxony, Mecklenburg-Western Pomerania,
+  North Rhine-Westphalia, Rhineland-Palatinate, Saxony and Thuringia. The app picks the services
+  from simplified state outlines, and Esri World Imagery fills in everywhere else. Hessen, Hamburg,
+  Bremen and Saarland have no suitable open service. Sachsen-Anhalt and Schleswig-Holstein have
+  one, but it lacks the CORS headers the export needs. Sources are configured in
+  `src/lib/map/imagery.ts`.
+- **Imagery alignment.** Nudge the Esri layer by a few metres so it matches the street map. The
+  official orthophotos are already exact and are not shifted.
 - **German and English.** The language follows the browser, and you can override it in the settings
   ([Paraglide JS](https://inlang.com/m/gerre34r/library-inlang-paraglideJs)).
 - **Installable PWA.** It works offline once visited, and map tiles you have viewed are cached.
@@ -103,6 +112,8 @@ src/
     solar/layout.ts       roof projection, grid packing, azimuth
     solar/economics.ts    self-consumption, battery, payback
     solar/yield.ts        PVGIS client, cache, offline estimate
+    map/imagery.ts        state orthophoto services and which ones cover the view
+    map/regions.ts        simplified state outlines (generated from BKG VG2500)
     report/pdf.ts         jsPDF proposal
     utils/screenshot.ts   html2canvas-pro map capture
     components/           roof card, economics panel, address search, logo cropper, UI kit
@@ -122,7 +133,9 @@ compiles them into `src/lib/paraglide/` (git-ignored) during dev and build. Use 
 
 ## Data sources
 
-- Imagery: Esri World Imagery. Streets: © OpenStreetMap contributors.
+- Imagery: the official orthophotos of the German states (credited on the map and in the PDF), and
+  Esri World Imagery elsewhere. Streets: © OpenStreetMap contributors.
+- State outlines for choosing imagery: VG2500 © GeoBasis-DE / BKG (2024), dl-de/by-2-0.
 - Geocoding: OpenStreetMap Nominatim, subject to its
   [usage policy](https://operations.osmfoundation.org/policies/nominatim/).
 - Yields: PVGIS © European Union, JRC.

@@ -60,7 +60,9 @@ test.describe('exports', () => {
 			'Economics',
 			'Payback',
 			'Module specification',
-			'Yield data: PVGIS'
+			'Yield data: PVGIS',
+			'Aerial imagery:',
+			'LGL-BW'
 		]) {
 			expect(text, `PDF should mention "${expected}"`).toContain(expected);
 		}

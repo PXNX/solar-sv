@@ -4,8 +4,15 @@ import { defineConfig } from 'vite';
 import Icons from 'unplugin-icons/vite';
 import { SvelteKitPWA } from '@vite-pwa/sveltekit';
 import { paraglideVitePlugin } from '@inlang/paraglide-js';
+import { ORTHOPHOTO_HOSTS } from './src/lib/map/imagery.ts';
 
 const DAY = 24 * 60 * 60;
+/** Global imagery plus every state orthophoto service (host names only contain dots to escape). */
+const IMAGERY_TILES = new RegExp(
+	`^https://(${['server.arcgisonline.com', ...ORTHOPHOTO_HOSTS]
+		.map((host) => host.replaceAll('.', '\\.'))
+		.join('|')})/`
+);
 
 export default defineConfig({
 	plugins: [
@@ -58,7 +65,7 @@ export default defineConfig({
 				runtimeCaching: [
 					{
 						// Aerial imagery changes rarely; keep what was viewed so sites open offline.
-						urlPattern: /^https:\/\/server\.arcgisonline\.com\/.*/,
+						urlPattern: IMAGERY_TILES,
 						handler: 'CacheFirst',
 						options: {
 							cacheName: 'imagery-tiles',

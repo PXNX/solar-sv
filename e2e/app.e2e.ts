@@ -1,3 +1,4 @@
+import type { Page } from '@playwright/test';
 import { expect, startWithCustomer, test } from './fixtures';
 
 test.describe('privacy policy', () => {
@@ -71,6 +72,64 @@ test.describe('imagery alignment', () => {
 			JSON.parse(localStorage.getItem('solar-imagery-offset')!)
 		);
 		expect(offset).toEqual({ east: 0.5, north: 0.25 });
+	});
+
+	test('the state orthophotos are not shifted and hide while aligning', async ({ page }) => {
+		await startWithCustomer(page);
+		const orthophotos = page.locator('.leaflet-orthophotos-pane img');
+		await expect(orthophotos.first()).toBeAttached();
+		await page.getByRole('button', { name: 'Align satellite imagery with the street map' }).click();
+		await expect(orthophotos).toHaveCount(0);
+		await page.getByRole('button', { name: 'Shift east (→)' }).click();
+		await page.getByRole('button', { name: 'Done' }).click();
+		await expect(orthophotos.first()).toBeAttached();
+		expect(
+			await page.locator('.leaflet-orthophotos-pane').evaluate((el) => el.style.transform)
+		).toBe('');
+	});
+});
+
+test.describe('state orthophotos', () => {
+	/** Opens the planner looking at the given place, without a customer. */
+	async function viewAt(page: Page, center: [number, number], zoom = 19) {
+		await page.addInitScript((view) => localStorage.setItem('solar-view', JSON.stringify(view)), {
+			center,
+			zoom
+		});
+		await page.goto('/');
+		await expect(page.locator('.leaflet-imagery-pane img').first()).toBeAttached();
+		await page.waitForTimeout(500);
+	}
+
+	test('Stuttgart loads the 20 cm imagery of Baden-Württemberg', async ({ page, requests }) => {
+		await viewAt(page, [48.7781, 9.1815]);
+		await expect.poll(() => requests.orthophotos.length).toBeGreaterThan(0);
+		expect(requests.orthophotos.every((url) => url.includes('owsproxy.lgl-bw.de'))).toBe(true);
+		expect(requests.orthophotos[0]).toContain('TILEMATRIX=GoogleMapsCompatible:19');
+		await expect(page.locator('.leaflet-control-attribution')).toContainText('LGL-BW');
+	});
+
+	test('Munich asks the Bavarian WMS for web mercator tiles', async ({ page, requests }) => {
+		await viewAt(page, [48.1374, 11.5755]);
+		await expect.poll(() => requests.orthophotos.length).toBeGreaterThan(0);
+		const url = new URL(requests.orthophotos.find((u) => u.includes('bayern.de'))!);
+		expect(url.searchParams.get('layers')).toBe('by_dop40c');
+		expect(url.searchParams.get('crs')).toBe('EPSG:3857');
+		expect(url.searchParams.get('transparent')).toBe('true');
+		await expect(page.locator('.leaflet-control-attribution')).toContainText(
+			'Bayerische Vermessungsverwaltung'
+		);
+	});
+
+	test('outside Germany and when zoomed out only the global imagery loads', async ({
+		page,
+		requests
+	}) => {
+		await viewAt(page, [48.8566, 2.3522]);
+		await viewAt(page, [48.7781, 9.1815], 10);
+		await expect(page.locator('.leaflet-imagery-pane img').first()).toBeAttached();
+		expect(requests.orthophotos).toEqual([]);
+		await expect(page.locator('.leaflet-control-attribution')).not.toContainText('LGL-BW');
 	});
 });
 

@@ -167,6 +167,7 @@
 	"col_yield": "kWh/yr",
 	"battery_none": "none",
 	"battery_summary": "{capacity} kWh · {price}",
+	"report_imagery_credit": "Aerial imagery: {sources}.",
 	"report_pvgis_credit": "Yield data: PVGIS (c) European Union",
 	"privacy": "Privacy",
 	"crop_title": "Crop logo",

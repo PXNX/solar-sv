@@ -110,6 +110,12 @@
 						von Standardvertragsklauseln.
 					</li>
 					<li>
+						Amtliche Luftbilder (Digitale Orthophotos) der Vermessungsverwaltungen der Länder
+						Baden-Württemberg, Bayern, Berlin/Brandenburg, Mecklenburg-Vorpommern, Niedersachsen,
+						Nordrhein-Westfalen, Rheinland-Pfalz, Sachsen und Thüringen, jeweils nur wenn der
+						Kartenausschnitt im betreffenden Land liegt. Die Server stehen in Deutschland.
+					</li>
+					<li>
 						Straßenkarte: OpenStreetMap Foundation, St John’s Innovation Centre, Cowley Road,
 						Cambridge, CB4 0WS, Vereinigtes Königreich (Angemessenheitsbeschluss der EU).
 					</li>
@@ -201,6 +207,12 @@
 					<li>
 						Aerial imagery: Esri Inc., 380 New York Street, Redlands, CA 92373, USA (World Imagery),
 						based on the EU-US Data Privacy Framework or standard contractual clauses.
+					</li>
+					<li>
+						Official aerial imagery (digital orthophotos) from the state survey offices of
+						Baden-Württemberg, Bavaria, Berlin/Brandenburg, Mecklenburg-Western Pomerania, Lower
+						Saxony, North Rhine-Westphalia, Rhineland-Palatinate, Saxony and Thuringia, each only
+						while the map shows that state. The servers are located in Germany.
 					</li>
 					<li>
 						Street map: OpenStreetMap Foundation, St John’s Innovation Centre, Cowley Road,

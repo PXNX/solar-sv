@@ -1,5 +1,6 @@
 import { test as base, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
+import { ORTHOPHOTO_HOSTS } from '../src/lib/map/imagery';
 
 /** 1 × 1 grey PNG, stretched by Leaflet into every map tile. */
 const TILE = Buffer.from(
@@ -21,18 +22,29 @@ export const MOCK_YIELD = 1100;
 export const LOGO = readFileSync(new URL('./fixtures/logo.png', import.meta.url));
 
 interface Fixtures {
-	/** Requests seen by the mocked Nominatim and yield endpoints. */
-	requests: { nominatim: string[]; yield: string[] };
+	/** Requests seen by the mocked Nominatim, yield and state imagery endpoints. */
+	requests: { nominatim: string[]; yield: string[]; orthophotos: string[] };
 }
 
 export const test = base.extend<Fixtures>({
 	requests: [
 		async ({ context }, use) => {
-			const requests = { nominatim: [] as string[], yield: [] as string[] };
+			const requests = {
+				nominatim: [] as string[],
+				yield: [] as string[],
+				orthophotos: [] as string[]
+			};
 			const cors = { 'access-control-allow-origin': '*' };
 
 			await context.route(/server\.arcgisonline\.com|tile\.openstreetmap\.org/, (route) =>
 				route.fulfill({ status: 200, contentType: 'image/png', headers: cors, body: TILE })
+			);
+			await context.route(
+				(url) => ORTHOPHOTO_HOSTS.includes(url.host),
+				(route) => {
+					requests.orthophotos.push(route.request().url());
+					route.fulfill({ status: 200, contentType: 'image/png', headers: cors, body: TILE });
+				}
 			);
 			await context.route(/nominatim\.openstreetmap\.org\/search/, (route) => {
 				const q = new URL(route.request().url()).searchParams.get('q') ?? '';

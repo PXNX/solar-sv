@@ -3,6 +3,7 @@
 	import {
 		Map,
 		TileLayer,
+		TileLayerWMS,
 		Polygon,
 		Polyline,
 		CircleMarker,
@@ -56,6 +57,7 @@
 		type Roof
 	} from '$lib/solar/layout';
 	import { persistedBranding } from '$lib/branding';
+	import { visibleOrthophotos } from '$lib/map/imagery';
 	import {
 		archive,
 		isEmptyProject,
@@ -154,6 +156,7 @@
 	let mapElement: HTMLElement;
 	let imageryLayer: L.TileLayer | undefined = $state();
 	let streetLayer: L.TileLayer | undefined = $state();
+	const orthophotoLayers: Record<string, L.TileLayer | undefined> = $state({});
 	let mapType = $state<'satellite' | 'osm'>('satellite');
 
 	let drawing = $state(false);
@@ -178,7 +181,13 @@
 	let imageryOffset = $state(storedOffset);
 	let aligning = $state(false);
 	let imageryPane = $state<HTMLElement>();
-	let view = $state({ zoom: MAP_OPTIONS.zoom ?? 17, lat: STUTTGART[0] });
+	let view = $state({
+		zoom: MAP_OPTIONS.zoom ?? 17,
+		lat: STUTTGART[0],
+		bounds: { south: 0, west: 0, north: 0, east: 0 }
+	});
+	// While aligning, only the global imagery shows: the official orthophotos are already exact.
+	const orthophotos = $derived(aligning ? [] : visibleOrthophotos(view.bounds, view.zoom));
 
 	$effect(() => saveOffset($state.snapshot(imageryOffset)));
 
@@ -187,7 +196,10 @@
 		// Below the default tile pane, so the street overlay used for aligning sits on top.
 		const pane = map.createPane('imagery');
 		pane.style.zIndex = '150';
+		// State orthophotos sit above the global imagery and are not shifted by the alignment.
+		map.createPane('orthophotos').style.zIndex = '160';
 		imageryPane = pane;
+		updateView();
 	});
 
 	$effect(() => {
@@ -208,7 +220,17 @@
 	function updateView(zoom = map?.getZoom()) {
 		if (!map || zoom === undefined) return;
 		const center = map.getCenter();
-		view = { zoom, lat: center.lat };
+		const bounds = map.getBounds();
+		view = {
+			zoom,
+			lat: center.lat,
+			bounds: {
+				south: bounds.getSouth(),
+				west: bounds.getWest(),
+				north: bounds.getNorth(),
+				east: bounds.getEast()
+			}
+		};
 		if (!exportMode) saveView({ center: [center.lat, center.lng], zoom: map.getZoom() });
 	}
 
@@ -370,7 +392,7 @@
 		await new Promise((r) => setTimeout(r, 150));
 		const started = performance.now();
 		const loading = () =>
-			[imageryLayer, streetLayer].some(
+			[imageryLayer, streetLayer, ...Object.values(orthophotoLayers)].some(
 				(layer) => layer && map?.hasLayer(layer) && layer.isLoading()
 			);
 		while (loading() && performance.now() - started < 8000) {
@@ -379,7 +401,7 @@
 	}
 
 	/** Frames all roofs, switches labels to plan style and renders the map to a canvas. */
-	async function captureMap(): Promise<HTMLCanvasElement> {
+	async function captureMap(): Promise<{ canvas: HTMLCanvasElement; credits: string[] }> {
 		if (!map) throw new Error('Map not ready');
 		const previous = { center: map.getCenter(), zoom: map.getZoom(), selected: selectedId };
 		exportMode = true;
@@ -392,13 +414,18 @@
 			if (outline.length > 0) {
 				map.fitBounds(L.latLngBounds(outline), { padding: [90, 90], maxZoom: 21, animate: false });
 			}
+			updateView();
 			await tick();
 			await waitForTiles();
-			return await renderElement(mapElement, {
+			const canvas = await renderElement(mapElement, {
 				width: EXPORT_FRAME.width,
 				height: EXPORT_FRAME.height,
 				scale: EXPORT_FRAME.scale
 			});
+			const credits = [...orthophotos.map((source) => source.attribution), 'Esri'].map(
+				(html) => new DOMParser().parseFromString(html, 'text/html').body.textContent ?? ''
+			);
+			return { canvas, credits };
 		} finally {
 			exportMode = false;
 			selectedId = previous.selected;
@@ -411,7 +438,7 @@
 	async function runExport(kind: 'png' | 'pdf') {
 		exporting = kind;
 		try {
-			const canvas = await captureMap();
+			const { canvas, credits } = await captureMap();
 			if (kind === 'png') {
 				downloadBlob(await canvasToBlob(canvas), fileName(m.export_png(), '.png'));
 				return;
@@ -427,7 +454,8 @@
 				yields: roofYields,
 				economics: $state.snapshot(project.economics),
 				result: economicsResult,
-				map: canvas
+				map: canvas,
+				imageryCredits: credits
 			});
 			downloadBlob(blob, fileName(m.export_pdf(), '.pdf'));
 		} catch (error) {
@@ -478,6 +506,30 @@
 					options={{ ...TILE_OPTIONS, pane: 'imagery', attribution: 'Tiles &copy; Esri' }}
 					bind:instance={imageryLayer}
 				/>
+				{#each orthophotos as source (source.id)}
+					{@const options = {
+						...TILE_OPTIONS,
+						maxNativeZoom: source.maxNativeZoom,
+						bounds: source.bounds,
+						pane: 'orthophotos',
+						attribution: source.attribution
+					}}
+					{#if source.kind === 'wms'}
+						<TileLayerWMS
+							url={source.url}
+							options={{
+								...options,
+								layers: source.layers ?? '',
+								format: source.format ?? 'image/png',
+								transparent: true,
+								version: '1.3.0'
+							}}
+							bind:instance={orthophotoLayers[source.id]}
+						/>
+					{:else}
+						<TileLayer url={source.url} {options} bind:instance={orthophotoLayers[source.id]} />
+					{/if}
+				{/each}
 			{/if}
 			{#if mapType === 'osm' || aligning}
 				<TileLayer

@@ -167,6 +167,7 @@
 	"col_yield": "kWh/Jahr",
 	"battery_none": "keiner",
 	"battery_summary": "{capacity} kWh · {price}",
+	"report_imagery_credit": "Luftbild: {sources}.",
 	"report_pvgis_credit": "Ertragsdaten: PVGIS (c) Europäische Union",
 	"privacy": "Datenschutz",
 	"crop_title": "Logo zuschneiden",
