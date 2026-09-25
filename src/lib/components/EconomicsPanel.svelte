@@ -92,6 +92,7 @@
 					grow
 					variant={economics.consumption === kwh ? 'soft-amber' : 'subtle'}
 					title={m.household_option({ n: i + 1, kwh: formatNumber(kwh) })}
+					aria-label={m.household_option({ n: i + 1, kwh: formatNumber(kwh) })}
 					onclick={() => (economics.consumption = kwh)}
 				>
 					{i + 1}<FluentPerson24Regular class="-ml-1 size-3.5" />

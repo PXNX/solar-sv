@@ -7,7 +7,8 @@ export const prerender = false;
 const PVGIS = 'https://re.jrc.ec.europa.eu/api/v5_3/PVcalc';
 
 function param(url: URL, name: string, min: number, max: number): number {
-	const value = Number(url.searchParams.get(name));
+	const raw = url.searchParams.get(name);
+	const value = raw === null || raw.trim() === '' ? NaN : Number(raw);
 	if (!Number.isFinite(value) || value < min || value > max) error(400, `Invalid ${name}`);
 	return value;
 }

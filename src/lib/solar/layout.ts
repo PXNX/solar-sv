@@ -299,3 +299,21 @@ export function layoutRoof(roof: Roof, settings: PanelSettings): RoofLayout {
 		azimuth
 	};
 }
+
+/**
+ * Direction a roof face will point to (down-slope, degrees clockwise from north), given its
+ * eave and any point on the roof side of it — used to preview the result while drawing.
+ * Returns null while the point lies on the eave line.
+ */
+export function facingAzimuth(eave: [LatLng, LatLng], inside: LatLng): number | null {
+	const proj = localProjection(eave[0]);
+	const p1 = proj.toLocal(eave[1]);
+	const q = proj.toLocal(inside);
+	const length = Math.hypot(p1.x, p1.y);
+	if (length < 0.01) return null;
+	let n = { x: -p1.y / length, y: p1.x / length };
+	const side = q.x * n.x + q.y * n.y;
+	if (Math.abs(side) < 0.05) return null;
+	if (side < 0) n = { x: -n.x, y: -n.y };
+	return (((Math.atan2(-n.x, -n.y) / DEG) % 360) + 360) % 360;
+}

@@ -14,7 +14,7 @@ export default defineConfig({
 			outdir: './src/lib/paraglide',
 			emitTsDeclarations: true,
 			// An explicit choice in Settings wins, otherwise follow the browser language.
-			strategy: ['localStorage', 'preferredLanguage', 'baseLocale']
+			strategy: ['custom-choice', 'preferredLanguage', 'baseLocale']
 		}),
 		sveltekit(),
 		tailwindcss(),

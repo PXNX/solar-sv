@@ -28,8 +28,8 @@
 	"stat_cost": "Cost",
 	"step_eave": "Step 1 · Eave",
 	"step_outline": "Step 2 · Outline",
-	"hint_eave": "Click both ends of the gutter edge",
-	"hint_outline": "Trace the roof face, click the first point to close",
+	"hint_eave": "Click the eave: start, then end",
+	"hint_outline": "Continue on the side that slopes up – the arrow shows where the roof faces",
 	"undo_point": "Undo last point (Backspace)",
 	"cancel_esc": "Cancel (Esc)",
 	"finish": "Finish",
@@ -139,7 +139,7 @@
 	"economics_title": "Economics",
 	"economics_summary": "{kwh} kWh/yr · payback {years}",
 	"household": "Household size",
-	"household_option": "{n} people · {kwh} kWh",
+	"household_option": "Household of {n} · {kwh} kWh",
 	"household_hint": "Typical values for a house without electric heating.",
 	"field_consumption": "Consumption (kWh/yr)",
 	"field_electricity_price": "Electricity (€/kWh)",
@@ -168,5 +168,11 @@
 	"battery_none": "none",
 	"battery_summary": "{capacity} kWh · {price}",
 	"report_pvgis_credit": "Yield data: PVGIS (c) European Union",
-	"privacy": "Privacy"
+	"privacy": "Privacy",
+	"crop_title": "Crop logo",
+	"crop_hint": "Drag the frame or its corners to choose the part of the image to use.",
+	"crop_apply": "Use logo",
+	"crop_cancel": "Cancel",
+	"crop_reset": "Whole image",
+	"facing_preview": "Faces {direction} · {degrees}°"
 }
